@@ -1,0 +1,36 @@
+enum TransactionType {
+  CREDIT
+  DEBIT
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  name      String
+  wallet    Wallet?
+  orders    Order[]
+  createdAt DateTime @default(now())
+
+  @@index([email])
+}
+
+model Wallet {
+  id           String              @id @default(uuid())
+  userId       String              @unique
+  user         User                @relation(fields: [userId], references: [id])
+  balance      Decimal             @default(0.00) @db.Decimal(12, 2)
+  transactions WalletTransaction[]
+  updatedAt    DateTime            @updatedAt
+}
+
+model WalletTransaction {
+  id          String          @id @default(uuid())
+  walletId    String
+  wallet      Wallet          @relation(fields: [walletId], references: [id])
+  amount      Decimal         @db.Decimal(12, 2)
+  type        TransactionType
+  description String
+  createdAt   DateTime        @default(now())
+
+  @@index([walletId, createdAt])
+}

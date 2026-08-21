@@ -1,0 +1,9 @@
+model Product {
+  id         String      @id @default(uuid())
+  title      String
+  stock      Int
+  price      Decimal     @db.Decimal(10, 2)
+  metadata   Json
+  orderItems OrderItem[]
+  createdAt  DateTime    @default(now())
+}
