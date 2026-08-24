@@ -19,18 +19,18 @@ async function main() {
 
   // Delete child records first to respect Foreign Key constraints
   await prisma.order.deleteMany();
-  await prisma.wallet.deleteMany(); // Delete wallet before user
+  await prisma.wallet.deleteMany();
   await prisma.user.deleteMany();
   await prisma.product.deleteMany();
 
-  // Create test user with initial wallet balance
-  const user = await prisma.user.create({
+  // Create primary test user (User A)
+  const user1 = await prisma.user.create({
     data: {
-      name: "Anas Khalid",
+      name: "Anas",
       email: "anas@example.com",
       wallet: {
         create: {
-          balance: 5000.0,
+          balance: 1000.0,
         },
       },
     },
@@ -39,8 +39,23 @@ async function main() {
     },
   });
 
-  // Create test products using 'title' field
-// Create test products including required 'metadata' field
+  // Create secondary test user (User B for P2P transfers)
+  const user2 = await prisma.user.create({
+    data: {
+      name: "Bilal Ahmed",
+      email: "bilal@example.com",
+      wallet: {
+        create: {
+          balance: 100.0,
+        },
+      },
+    },
+    include: {
+      wallet: true,
+    },
+  });
+
+  // Create test products
   const product1 = await prisma.product.create({
     data: {
       title: "Gaming Laptop",
@@ -60,7 +75,8 @@ async function main() {
   });
 
   console.log("✅ Seeding completed successfully!");
-  console.log("Created User ID:", user.id);
+  console.log("Created User 1 (Sender):", user1.id);
+  console.log("Created User 2 (Receiver):", user2.id);
   console.log("Created Products:", { p1: product1.id, p2: product2.id });
 }
 

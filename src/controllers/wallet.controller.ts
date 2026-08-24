@@ -1,17 +1,34 @@
 import { Request, Response } from "express";
 import { prisma } from "../config/db";
 import { executeAtomicTransfer } from "../lab/atomic-wallet-transaction";
+import { executeTransactionReversal, depositAndClearDebt } from "../lab/financial-recovery";
 
 /**
  * Controller endpoint wrapper for P2P Wallet Transfers.
- * Passes raw body parameters to the domain layer for centralized sanitization and execution.
+ * Enforces mandatory idempotency key header validation before forwarding to domain logic.
  */
 export const transferFunds = async (req: Request, res: Response): Promise<void> => {
   const { senderUserId, receiverUserId, amount } = req.body;
 
+  // Extract idempotency key from HTTP headers
+  const idempotencyKey = (req.headers["x-idempotency-key"] || req.headers["idempotency-key"]) as string | undefined;
+
+  // STRICT GUARD: Reject API requests lacking an idempotency key
+  if (!idempotencyKey || typeof idempotencyKey !== "string" || idempotencyKey.trim() === "") {
+    res.status(400).json({
+      success: false,
+      error: "Missing required header: 'x-idempotency-key' is mandatory for P2P wallet transfers.",
+    });
+    return;
+  }
+
   try {
-    // Pass raw amount directly so domain regex can sanitize garbage inputs
-    const result = await executeAtomicTransfer(senderUserId, receiverUserId, amount);
+    const result = await executeAtomicTransfer(
+      senderUserId,
+      receiverUserId,
+      amount,
+      idempotencyKey.trim()
+    );
 
     res.status(200).json({
       success: true,
@@ -26,7 +43,53 @@ export const transferFunds = async (req: Request, res: Response): Promise<void> 
   }
 };
 
-// 1. Fetch ALL wallets with user details
+/**
+ * Controller endpoint wrapper for Transaction Reversal & Overdraft Recovery.
+ */
+export const reverseTransaction = async (req: Request, res: Response): Promise<void> => {
+  const { transactionId } = req.body;
+
+  try {
+    const result = await executeTransactionReversal(transactionId);
+
+    res.status(200).json({
+      success: true,
+      message: "Transaction reversal executed successfully.",
+      data: result,
+    });
+  } catch (error: any) {
+    res.status(400).json({
+      success: false,
+      error: error.message || "Reversal operation failed.",
+    });
+  }
+};
+
+/**
+ * Controller endpoint wrapper for User Wallet Deposit and Debt Auto-Clearance.
+ */
+export const depositFunds = async (req: Request, res: Response): Promise<void> => {
+  const { userId, amount } = req.body;
+
+  try {
+    const result = await depositAndClearDebt(userId, amount);
+
+    res.status(200).json({
+      success: true,
+      message: "Deposit processed successfully.",
+      data: result,
+    });
+  } catch (error: any) {
+    res.status(400).json({
+      success: false,
+      error: error.message || "Deposit processing failed.",
+    });
+  }
+};
+
+/**
+ * Fetch ALL wallets with user details.
+ */
 export const getAllWallets = async (req: Request, res: Response): Promise<void> => {
   try {
     const wallets = await prisma.wallet.findMany({
@@ -51,7 +114,9 @@ export const getAllWallets = async (req: Request, res: Response): Promise<void> 
   }
 };
 
-// 2. Fetch single wallet by User ID
+/**
+ * Fetch single wallet by User ID.
+ */
 export const getWalletByUserId = async (req: Request, res: Response): Promise<void> => {
   try {
     const userId = req.params.userId as string;

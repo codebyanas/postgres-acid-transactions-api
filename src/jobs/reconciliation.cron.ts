@@ -3,16 +3,16 @@ import { TransactionType } from "@prisma/client";
 
 /**
  * ============================================================================
- * FINANCIAL RECONCILIATION CRON / WORKER SERVICE
+ * ENHANCED FINANCIAL RECONCILIATION AUDIT WORKER
  * ============================================================================
- * Scans transaction history for un-reversed duplicate transactions across 
- * short time windows to maintain double-entry audit accuracy.
+ * Audits ledger history using two levels of validation:
+ * 1. Exact Idempotency Match: 100% technical duplicate payload detection.
+ * 2. Time-Window Heuristic: Suspicious rapid transfers flagged for human review.
  */
 export const runReconciliationAudit = async () => {
-  console.log("[CRON WORKER] Running background financial audit scanning for duplicates...");
+  console.log("🔍 [CRON WORKER] Running background financial audit scanning...");
 
   try {
-    // 1. Fetch DEBIT transactions created in the last 24 hours
     const last24Hours = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
     const recentDebits = await prisma.walletTransaction.findMany({
@@ -23,9 +23,9 @@ export const runReconciliationAudit = async () => {
       orderBy: { createdAt: "desc" },
     });
 
-    const flaggedDuplicates: string[] = [];
+    const confirmedDuplicates: string[] = [];
+    const suspiciousAnomalies: string[] = [];
 
-    // 2. Scan for duplicate patterns (Same wallet, same amount within 10 seconds)
     for (let i = 0; i < recentDebits.length; i++) {
       for (let j = i + 1; j < recentDebits.length; j++) {
         const txA = recentDebits[i];
@@ -35,22 +35,39 @@ export const runReconciliationAudit = async () => {
         const isSameAmount = Number(txA.amount) === Number(txB.amount);
         const timeDiffMs = Math.abs(txA.createdAt.getTime() - txB.createdAt.getTime());
 
-        // Flag if same amount sent from same wallet within a 10-second window
-        if (isSameWallet && isSameAmount && timeDiffMs <= 10000) {
-          flaggedDuplicates.push(
-            `[FLAGGED ANOMALY] Tx ID 1: ${txA.id} | Tx ID 2: ${txB.id} | Amount: $${txA.amount} | Window: ${timeDiffMs / 1000}s`
+        // LEVEL 1: Exact Idempotency Key Match (100% Confirmed Glitch)
+        if (
+          txA.idempotencyKey &&
+          txB.idempotencyKey &&
+          txA.idempotencyKey === txB.idempotencyKey
+        ) {
+          confirmedDuplicates.push(
+            `[100% CONFIRMED GLITCH] Key: '${txA.idempotencyKey}' | Tx ID 1: ${txA.id} | Tx ID 2: ${txB.id}`
+          );
+        } 
+        // LEVEL 2: Rapid Time Window Heuristic (< 10s difference)
+        else if (isSameWallet && isSameAmount && timeDiffMs <= 10000) {
+          suspiciousAnomalies.push(
+            `[SUSPICIOUS TIME WINDOW] Tx ID 1: ${txA.id} | Tx ID 2: ${txB.id} | Amount: $${txA.amount} | Window: ${timeDiffMs / 1000}s`
           );
         }
       }
     }
 
-    if (flaggedDuplicates.length === 0) {
-      console.log("[CRON WORKER] Audit Complete: Zero un-flagged duplicate anomalies detected.");
+    if (confirmedDuplicates.length === 0 && suspiciousAnomalies.length === 0) {
+      console.log("✅ [CRON WORKER] Audit Complete: Zero anomalies detected.");
     } else {
-      console.warn(`[CRON WORKER] Audit Warning: Found ${flaggedDuplicates.length} suspicious transaction pairs:`);
-      flaggedDuplicates.forEach((msg) => console.warn(`   ${msg}`));
+      if (confirmedDuplicates.length > 0) {
+        console.error(`🚨 [CRON WORKER] CRITICAL: Found ${confirmedDuplicates.length} 100% Confirmed Technical Duplicates:`);
+        confirmedDuplicates.forEach((msg) => console.error(`   ${msg}`));
+      }
+
+      if (suspiciousAnomalies.length > 0) {
+        console.warn(`⚠️ [CRON WORKER] WARNING: Found ${suspiciousAnomalies.length} Suspicious Rapid Transfers (Flagged for Review):`);
+        suspiciousAnomalies.forEach((msg) => console.warn(`   ${msg}`));
+      }
     }
   } catch (error: any) {
-    console.error("[CRON WORKER ERROR] Audit failed:", error.message);
+    console.error("❌ [CRON WORKER ERROR] Audit failed:", error.message);
   }
 };

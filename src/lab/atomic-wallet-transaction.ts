@@ -1,6 +1,8 @@
 import { prisma } from "../config/db";
 import { TransactionType, WalletStatus } from "@prisma/client";
 
+const SYSTEM_RESERVE_EMAIL = "system.reserve@bank.internal";
+
 /**
  * Strict Financial Amount Sanitizer & Validator
  */
@@ -19,7 +21,7 @@ export const parseAndValidateAmount = (rawAmount: any): number => {
 
   if (!strictCurrencyRegex.test(strAmount)) {
     throw new Error(
-      `Invalid amount format: '${rawAmount}'. Amount must be a positive number with maximum 2 decimal places.`,
+      `Invalid amount format: '${rawAmount}'. Amount must be a positive number with maximum 2 decimal places.`
     );
   }
 
@@ -33,12 +35,13 @@ export const parseAndValidateAmount = (rawAmount: any): number => {
 };
 
 /**
- * Enterprise P2P Atomic Wallet Transfer with Status Guarding
+ * Enterprise P2P Atomic Wallet Transfer with Status Guarding & Bank Reserve Isolation
  */
 export const executeAtomicTransfer = async (
   senderUserId: string,
   receiverUserId: string,
   rawAmount: any,
+  idempotencyKey?: string
 ) => {
   if (
     !senderUserId ||
@@ -58,13 +61,28 @@ export const executeAtomicTransfer = async (
 
   if (senderUserId === receiverUserId) {
     throw new Error(
-      "Self-transfer strictly prohibited. Sender and Receiver cannot be identical.",
+      "Self-transfer strictly prohibited. Sender and Receiver cannot be identical."
     );
   }
 
   const transferAmount = parseAndValidateAmount(rawAmount);
 
   return await prisma.$transaction(async (tx) => {
+    // SYSTEM RESERVE ISOLATION GUARD: Verify neither party is the System Float User
+    const systemUser = await tx.user.findUnique({
+      where: { email: SYSTEM_RESERVE_EMAIL },
+      select: { id: true },
+    });
+
+    if (systemUser) {
+      if (senderUserId === systemUser.id) {
+        throw new Error("System Reserve Float Wallet is prohibited from initiating standard P2P transfers.");
+      }
+      if (receiverUserId === systemUser.id) {
+        throw new Error("Direct P2P transfers to System Reserve Float Wallet are strictly prohibited.");
+      }
+    }
+
     // 1. Acquire PostgreSQL Row Locks (FOR UPDATE)
     const lockOrder = [senderUserId, receiverUserId].sort();
 
@@ -85,16 +103,15 @@ export const executeAtomicTransfer = async (
       throw new Error("Sender wallet record not found.");
     }
 
-    // SAFEGUARD: STATUS CHECK (BLOCK RESTRICTED/FROZEN WALLETS FROM TRANSFERRING OUT)
     if (senderWallet.status === WalletStatus.RESTRICTED) {
       throw new Error(
-        "Account RESTRICTED due to outstanding debt. Please deposit funds to clear debt before transferring.",
+        "Account RESTRICTED due to outstanding debt. Please deposit funds to clear debt before transferring."
       );
     }
 
     if (senderWallet.status === WalletStatus.FROZEN) {
       throw new Error(
-        "Account is FROZEN by administrative lock. Transactions prohibited.",
+        "Account is FROZEN by administrative lock. Transactions prohibited."
       );
     }
 
@@ -112,7 +129,7 @@ export const executeAtomicTransfer = async (
 
     if (recentDuplicate) {
       throw new Error(
-        "Duplicate transaction detected. Please wait 5 seconds before repeating exact transfer.",
+        "Duplicate transaction detected. Please wait 5 seconds before repeating exact transfer."
       );
     }
 
@@ -120,7 +137,7 @@ export const executeAtomicTransfer = async (
     const currentBalance = Number(senderWallet.balance);
     if (currentBalance < transferAmount) {
       throw new Error(
-        `Insufficient funds. Available balance: $${currentBalance.toFixed(2)}, Required: $${transferAmount.toFixed(2)}`,
+        `Insufficient funds. Available balance: $${currentBalance.toFixed(2)}, Required: $${transferAmount.toFixed(2)}`
       );
     }
 
@@ -155,6 +172,7 @@ export const executeAtomicTransfer = async (
         amount: transferAmount,
         type: TransactionType.DEBIT,
         description: `Transferred $${transferAmount.toFixed(2)} to User ID: ${receiverUserId}`,
+        idempotencyKey: idempotencyKey || null,
       },
     });
 
@@ -164,6 +182,7 @@ export const executeAtomicTransfer = async (
         amount: transferAmount,
         type: TransactionType.CREDIT,
         description: `Received $${transferAmount.toFixed(2)} from User ID: ${senderUserId}`,
+        idempotencyKey: idempotencyKey || null,
       },
     });
 

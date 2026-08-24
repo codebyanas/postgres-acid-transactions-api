@@ -7,18 +7,13 @@
  * - FROZEN: Administrative freeze; all inbound/outbound transfers blocked.
  * - RESTRICTED: Overdrawn account (negative balance/debt); cash-outs blocked.
  */
+
 enum WalletStatus {
   ACTIVE
   FROZEN
   RESTRICTED
 }
 
-/**
- * ============================================================================
- * TRANSACTION TYPE ENUM
- * ============================================================================
- * Extended to support financial reversal entries for double-entry auditability.
- */
 enum TransactionType {
   CREDIT
   DEBIT
@@ -48,13 +43,15 @@ model Wallet {
 }
 
 model WalletTransaction {
-  id          String          @id @default(uuid())
-  walletId    String
-  wallet      Wallet          @relation(fields: [walletId], references: [id])
-  amount      Decimal         @db.Decimal(12, 2)
-  type        TransactionType
-  description String
-  createdAt   DateTime        @default(now())
+  id             String          @id @default(uuid())
+  walletId       String
+  wallet         Wallet          @relation(fields: [walletId], references: [id])
+  amount         Decimal         @db.Decimal(12, 2)
+  type           TransactionType
+  description    String
+  idempotencyKey String?
+  createdAt      DateTime        @default(now())
 
   @@index([walletId, createdAt])
+  @@index([idempotencyKey])
 }
