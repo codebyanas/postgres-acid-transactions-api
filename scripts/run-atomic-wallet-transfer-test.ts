@@ -2,7 +2,7 @@ import { prisma } from "../src/config/db";
 import { executeAtomicTransfer } from "../src/lab/atomic-wallet-transaction";
 
 /**
- * CLI Test Suite for Atomic Wallet Transfer & Input Exploits.
+ * CLI Test Suite for Atomic Wallet Transfer, Input Exploits, & Duplicate Safeguards.
  * Command: npx tsx scripts/run-atomic-wallet-transfer-test.ts
  */
 async function runAtomicWalletTransferTest() {
@@ -63,6 +63,19 @@ async function runAtomicWalletTransferTest() {
     console.log("--- TEST 7: Self-Transfer Prevention ---");
     try {
       await executeAtomicTransfer(sender.id, sender.id, 10.00);
+    } catch (err: any) {
+      console.log("✅ Blocked Expectedly:", err.message, "\n");
+    }
+
+    console.log("--- TEST 8: 5-Second Short-Window Duplicate Protection Check ---");
+    try {
+      console.log("  -> Initiating 1st transfer of $15.00...");
+      await executeAtomicTransfer(sender.id, receiver.id, 15.00);
+      console.log("  -> 1st transfer completed successfully.");
+
+      console.log("  -> Attempting immediate 2nd transfer of exact same $15.00...");
+      await executeAtomicTransfer(sender.id, receiver.id, 15.00);
+      console.log("❌ Failed: Duplicate transaction was NOT blocked!");
     } catch (err: any) {
       console.log("✅ Blocked Expectedly:", err.message, "\n");
     }
