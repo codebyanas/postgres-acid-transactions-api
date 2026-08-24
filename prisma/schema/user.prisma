@@ -1,6 +1,29 @@
+/**
+ * ============================================================================
+ * WALLET STATUS ENUM
+ * ============================================================================
+ * Defines operational states for user wallets:
+ * - ACTIVE: Normal transactions permitted.
+ * - FROZEN: Administrative freeze; all inbound/outbound transfers blocked.
+ * - RESTRICTED: Overdrawn account (negative balance/debt); cash-outs blocked.
+ */
+enum WalletStatus {
+  ACTIVE
+  FROZEN
+  RESTRICTED
+}
+
+/**
+ * ============================================================================
+ * TRANSACTION TYPE ENUM
+ * ============================================================================
+ * Extended to support financial reversal entries for double-entry auditability.
+ */
 enum TransactionType {
   CREDIT
   DEBIT
+  REVERSAL_CREDIT
+  REVERSAL_DEBIT
 }
 
 model User {
@@ -19,6 +42,7 @@ model Wallet {
   userId       String              @unique
   user         User                @relation(fields: [userId], references: [id])
   balance      Decimal             @default(0.00) @db.Decimal(12, 2)
+  status       WalletStatus        @default(ACTIVE)
   transactions WalletTransaction[]
   updatedAt    DateTime            @updatedAt
 }
