@@ -5,15 +5,12 @@ import { executeTransactionReversal, depositAndClearDebt } from "../lab/financia
 
 /**
  * Controller endpoint wrapper for P2P Wallet Transfers.
- * Enforces mandatory idempotency key header validation before forwarding to domain logic.
+ * Enforces mandatory idempotency key header validation.
  */
 export const transferFunds = async (req: Request, res: Response): Promise<void> => {
   const { senderUserId, receiverUserId, amount } = req.body;
-
-  // Extract idempotency key from HTTP headers
   const idempotencyKey = (req.headers["x-idempotency-key"] || req.headers["idempotency-key"]) as string | undefined;
 
-  // STRICT GUARD: Reject API requests lacking an idempotency key
   if (!idempotencyKey || typeof idempotencyKey !== "string" || idempotencyKey.trim() === "") {
     res.status(400).json({
       success: false,
@@ -45,12 +42,22 @@ export const transferFunds = async (req: Request, res: Response): Promise<void> 
 
 /**
  * Controller endpoint wrapper for Transaction Reversal & Overdraft Recovery.
+ * Enforces mandatory idempotency key header validation.
  */
 export const reverseTransaction = async (req: Request, res: Response): Promise<void> => {
   const { transactionId } = req.body;
+  const idempotencyKey = (req.headers["x-idempotency-key"] || req.headers["idempotency-key"]) as string | undefined;
+
+  if (!idempotencyKey || typeof idempotencyKey !== "string" || idempotencyKey.trim() === "") {
+    res.status(400).json({
+      success: false,
+      error: "Missing required header: 'x-idempotency-key' is mandatory for transaction reversal.",
+    });
+    return;
+  }
 
   try {
-    const result = await executeTransactionReversal(transactionId);
+    const result = await executeTransactionReversal(transactionId, idempotencyKey.trim());
 
     res.status(200).json({
       success: true,
@@ -67,12 +74,22 @@ export const reverseTransaction = async (req: Request, res: Response): Promise<v
 
 /**
  * Controller endpoint wrapper for User Wallet Deposit and Debt Auto-Clearance.
+ * Enforces mandatory idempotency key header validation.
  */
 export const depositFunds = async (req: Request, res: Response): Promise<void> => {
   const { userId, amount } = req.body;
+  const idempotencyKey = (req.headers["x-idempotency-key"] || req.headers["idempotency-key"]) as string | undefined;
+
+  if (!idempotencyKey || typeof idempotencyKey !== "string" || idempotencyKey.trim() === "") {
+    res.status(400).json({
+      success: false,
+      error: "Missing required header: 'x-idempotency-key' is mandatory for deposits.",
+    });
+    return;
+  }
 
   try {
-    const result = await depositAndClearDebt(userId, amount);
+    const result = await depositAndClearDebt(userId, amount, idempotencyKey.trim());
 
     res.status(200).json({
       success: true,

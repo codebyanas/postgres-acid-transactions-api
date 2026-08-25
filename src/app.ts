@@ -13,7 +13,7 @@ app.use(express.json());
 
 app.use("/api/users", userRoutes);
 app.use("/api/products", productRoutes);
-app.use("/api/wallets", walletRoutes);
+app.use("/api/wallet", walletRoutes);
 
 app.get("/health", (req: Request, res: Response) => {
   res.json({ status: "OK", message: "Server is running smoothly!" });

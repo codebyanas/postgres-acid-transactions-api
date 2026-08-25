@@ -68,7 +68,7 @@ export const executeAtomicTransfer = async (
   const transferAmount = parseAndValidateAmount(rawAmount);
 
   return await prisma.$transaction(async (tx) => {
-    // SYSTEM RESERVE ISOLATION GUARD: Verify neither party is the System Float User
+    // SYSTEM RESERVE ISOLATION GUARD
     const systemUser = await tx.user.findUnique({
       where: { email: SYSTEM_RESERVE_EMAIL },
       select: { id: true },
@@ -94,9 +94,10 @@ export const executeAtomicTransfer = async (
       `;
     }
 
-    // 2. Fetch Sender Wallet
+    // 2. Fetch Sender Wallet with User details
     const senderWallet = await tx.wallet.findUnique({
       where: { userId: senderUserId },
+      include: { user: true },
     });
 
     if (!senderWallet) {
@@ -141,9 +142,10 @@ export const executeAtomicTransfer = async (
       );
     }
 
-    // 5. Fetch Receiver Wallet
+    // 5. Fetch Receiver Wallet with User details
     const receiverWallet = await tx.wallet.findUnique({
       where: { userId: receiverUserId },
+      include: { user: true },
     });
 
     if (!receiverWallet) {
@@ -165,13 +167,15 @@ export const executeAtomicTransfer = async (
       data: { balance: { increment: transferAmount } },
     });
 
-    // 7. Write Double-Entry Audit Log
+    // 7. Write Double-Entry Audit Log (With Names & Idempotency Key)
     await tx.walletTransaction.create({
       data: {
         walletId: senderWallet.id,
         amount: transferAmount,
         type: TransactionType.DEBIT,
-        description: `Transferred $${transferAmount.toFixed(2)} to User ID: ${receiverUserId}`,
+        description: `Transferred $${transferAmount.toFixed(2)} to ${receiverWallet.user.name} (User ID: ${receiverUserId})`,
+        senderName: senderWallet.user.name,
+        receiverName: receiverWallet.user.name,
         idempotencyKey: idempotencyKey || null,
       },
     });
@@ -181,7 +185,9 @@ export const executeAtomicTransfer = async (
         walletId: receiverWallet.id,
         amount: transferAmount,
         type: TransactionType.CREDIT,
-        description: `Received $${transferAmount.toFixed(2)} from User ID: ${senderUserId}`,
+        description: `Received $${transferAmount.toFixed(2)} from ${senderWallet.user.name} (User ID: ${senderUserId})`,
+        senderName: senderWallet.user.name,
+        receiverName: receiverWallet.user.name,
         idempotencyKey: idempotencyKey || null,
       },
     });

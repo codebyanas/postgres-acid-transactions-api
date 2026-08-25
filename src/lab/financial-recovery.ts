@@ -12,23 +12,24 @@ const SYSTEM_RESERVE_EMAIL = "system.reserve@bank.internal";
  * DOUBLE-ENTRY TRANSACTION REVERSAL ENGINE
  * ============================================================================
  * Executes an automated reversal of an erroneous or duplicate transaction.
- * 
- * Financial Safeguards Enforced:
- * 1. Zero-Sum Ledger Integrity: Original sender receives 100% refund immediately.
- * 2. Overdraft & Debt Management: Allows defaulter balance to drop negative (e.g., -$70.00).
- * 3. System Reserve Float Intermediary: System float covers temporary deficits.
- * 4. Automatic Account Restriction: Defaulter wallet status updated to RESTRICTED upon debt.
  */
-export const executeTransactionReversal = async (originalTransactionId: string) => {
-  if (!originalTransactionId || typeof originalTransactionId !== "string") {
+export const executeTransactionReversal = async (
+  originalTransactionId: string,
+  idempotencyKey?: string
+) => {
+  if (!originalTransactionId || typeof originalTransactionId !== "string" || originalTransactionId.trim() === "") {
     throw new Error("Invalid original transaction ID provided for reversal.");
   }
 
   return await prisma.$transaction(async (tx) => {
-    // 1. Fetch Original Transaction
+    // 1. Fetch Original Transaction with Sender User Details
     const originalTx = await tx.walletTransaction.findUnique({
       where: { id: originalTransactionId },
-      include: { wallet: true },
+      include: {
+        wallet: {
+          include: { user: true },
+        },
+      },
     });
 
     if (!originalTx) {
@@ -37,6 +38,18 @@ export const executeTransactionReversal = async (originalTransactionId: string) 
 
     if (originalTx.type !== TransactionType.DEBIT) {
       throw new Error("Reversal can only be initiated from the primary DEBIT transaction entry.");
+    }
+
+    // GUARD: Prevent Double Reversal
+    const existingReversal = await tx.walletTransaction.findFirst({
+      where: {
+        description: { contains: originalTransactionId },
+        type: { in: [TransactionType.REVERSAL_CREDIT, TransactionType.REVERSAL_DEBIT] },
+      },
+    });
+
+    if (existingReversal) {
+      throw new Error(`Transaction '${originalTransactionId}' has already been reversed. Double-reversal strictly prohibited.`);
     }
 
     const reversalAmount = Number(originalTx.amount);
@@ -52,14 +65,13 @@ export const executeTransactionReversal = async (originalTransactionId: string) 
     }
 
     // 3. Extract Receiver User ID from Original Description
-    // Description pattern: "Transferred $X to User ID: <RECEIVER_USER_ID>"
     const descriptionParts = originalTx.description.split("User ID: ");
     if (descriptionParts.length < 2) {
       throw new Error("Failed to parse receiver user ID from original transaction record.");
     }
-    const receiverUserId = descriptionParts[1].trim();
+    const receiverUserId = descriptionParts[1].replace(")", "").trim();
 
-    // 4. Lock All Affected Wallets (Original Sender, Erroneous Receiver, System Reserve)
+    // 4. Lock All Affected Wallets
     const senderWallet = originalTx.wallet;
     const lockOrder = [senderWallet.userId, receiverUserId, systemUser.id].sort();
 
@@ -71,16 +83,15 @@ export const executeTransactionReversal = async (originalTransactionId: string) 
       `;
     }
 
-    // Fetch Receiver Wallet after lock
     const receiverWallet = await tx.wallet.findUnique({
       where: { userId: receiverUserId },
+      include: { user: true },
     });
 
     if (!receiverWallet) {
       throw new Error("Target receiver wallet record not found for reversal.");
     }
 
-    // Fetch Fresh System Wallet State
     const freshSystemWallet = await tx.wallet.findUnique({
       where: { id: systemUser.wallet.id },
     });
@@ -94,19 +105,16 @@ export const executeTransactionReversal = async (originalTransactionId: string) 
     let systemFloatContribution = 0;
     let newReceiverBalance = currentReceiverBalance - reversalAmount;
 
-    // Check if receiver needs System Float coverage for deficit
     if (newReceiverBalance < 0) {
       systemFloatContribution = Math.abs(newReceiverBalance);
     }
 
     // 6. Execute Balance Mutations
-    // Refund Original Sender in Full (+reversalAmount)
     const updatedSender = await tx.wallet.update({
       where: { id: senderWallet.id },
       data: { balance: { increment: reversalAmount } },
     });
 
-    // Deduct Reversal Amount from Erroneous Receiver (Can result in Negative Balance)
     const updatedReceiver = await tx.wallet.update({
       where: { id: receiverWallet.id },
       data: {
@@ -115,7 +123,6 @@ export const executeTransactionReversal = async (originalTransactionId: string) 
       },
     });
 
-    // Deduct Deficit Float from System Reserve Wallet if applicable
     if (systemFloatContribution > 0) {
       await tx.wallet.update({
         where: { id: freshSystemWallet.id },
@@ -123,13 +130,16 @@ export const executeTransactionReversal = async (originalTransactionId: string) 
       });
     }
 
-    // 7. Write Double-Entry Reversal Ledger Records
+    // 7. Write Double-Entry Reversal Ledger Records (With Names)
     await tx.walletTransaction.create({
       data: {
         walletId: senderWallet.id,
         amount: reversalAmount,
         type: TransactionType.REVERSAL_CREDIT,
         description: `REVERSAL REFUND: Recovered $${reversalAmount.toFixed(2)} from duplicate tx: ${originalTransactionId}`,
+        senderName: receiverWallet.user.name,
+        receiverName: senderWallet.user.name,
+        idempotencyKey: idempotencyKey || null,
       },
     });
 
@@ -139,6 +149,9 @@ export const executeTransactionReversal = async (originalTransactionId: string) 
         amount: reversalAmount,
         type: TransactionType.REVERSAL_DEBIT,
         description: `REVERSAL CLAWBACK: Reclaimed $${reversalAmount.toFixed(2)} for duplicate tx: ${originalTransactionId}`,
+        senderName: receiverWallet.user.name,
+        receiverName: senderWallet.user.name,
+        idempotencyKey: idempotencyKey || null,
       },
     });
 
@@ -156,14 +169,16 @@ export const executeTransactionReversal = async (originalTransactionId: string) 
  * ============================================================================
  * AUTOMATIC DEBT OFFSET & RECOVERY SERVICE
  * ============================================================================
- * Processes incoming wallet deposits. If the wallet carries a negative balance (debt),
- * funds are automatically diverted to repay the System Reserve Float first.
+ * Processes incoming wallet deposits with name logging.
  */
-export const depositAndClearDebt = async (userId: string, rawAmount: any) => {
+export const depositAndClearDebt = async (
+  userId: string,
+  rawAmount: any,
+  idempotencyKey?: string
+) => {
   const depositAmount = parseAndValidateAmount(rawAmount);
 
   return await prisma.$transaction(async (tx) => {
-    // 1. Fetch System Reserve User
     const systemUser = await tx.user.findUnique({
       where: { email: SYSTEM_RESERVE_EMAIL },
       include: { wallet: true },
@@ -173,7 +188,6 @@ export const depositAndClearDebt = async (userId: string, rawAmount: any) => {
       throw new Error("System Reserve Float Wallet unavailable.");
     }
 
-    // 2. Lock User and System Reserve Wallets
     const lockOrder = [userId, systemUser.id].sort();
     for (const uId of lockOrder) {
       await tx.$queryRaw`
@@ -183,7 +197,11 @@ export const depositAndClearDebt = async (userId: string, rawAmount: any) => {
       `;
     }
 
-    const userWallet = await tx.wallet.findUnique({ where: { userId } });
+    const userWallet = await tx.wallet.findUnique({
+      where: { userId },
+      include: { user: true },
+    });
+
     if (!userWallet) {
       throw new Error("User wallet record not found.");
     }
@@ -193,29 +211,24 @@ export const depositAndClearDebt = async (userId: string, rawAmount: any) => {
     let finalUserBalance = currentBalance + depositAmount;
     let updatedStatus = userWallet.status;
 
-    // 3. Debt Recovery Logic (If balance is negative)
     if (currentBalance < 0) {
       const activeDebt = Math.abs(currentBalance);
 
       if (depositAmount >= activeDebt) {
-        // Full debt covered
         debtRepaidToSystem = activeDebt;
         finalUserBalance = depositAmount - activeDebt;
-        updatedStatus = WalletStatus.ACTIVE; // Account un-restricted
+        updatedStatus = WalletStatus.ACTIVE;
       } else {
-        // Partial debt covered
         debtRepaidToSystem = depositAmount;
-        finalUserBalance = currentBalance + depositAmount; // Remains negative
+        finalUserBalance = currentBalance + depositAmount;
       }
 
-      // Reimbursing System Reserve Float
       await tx.wallet.update({
         where: { id: systemUser.wallet.id },
         data: { balance: { increment: debtRepaidToSystem } },
       });
     }
 
-    // 4. Update User Wallet
     const updatedWallet = await tx.wallet.update({
       where: { userId },
       data: {
@@ -224,7 +237,6 @@ export const depositAndClearDebt = async (userId: string, rawAmount: any) => {
       },
     });
 
-    // 5. Create Ledger Entry
     await tx.walletTransaction.create({
       data: {
         walletId: userWallet.id,
@@ -233,6 +245,9 @@ export const depositAndClearDebt = async (userId: string, rawAmount: any) => {
         description: debtRepaidToSystem > 0
           ? `DEPOSIT & DEBT CLEARANCE: $${debtRepaidToSystem.toFixed(2)} auto-diverted to clear system debt.`
           : `STANDARD DEPOSIT: Added $${depositAmount.toFixed(2)} to wallet balance.`,
+        senderName: userWallet.user.name,
+        receiverName: userWallet.user.name,
+        idempotencyKey: idempotencyKey || null,
       },
     });
 

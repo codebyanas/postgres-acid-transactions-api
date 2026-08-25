@@ -1,13 +1,3 @@
-/**
- * ============================================================================
- * WALLET STATUS ENUM
- * ============================================================================
- * Defines operational states for user wallets:
- * - ACTIVE: Normal transactions permitted.
- * - FROZEN: Administrative freeze; all inbound/outbound transfers blocked.
- * - RESTRICTED: Overdrawn account (negative balance/debt); cash-outs blocked.
- */
-
 enum WalletStatus {
   ACTIVE
   FROZEN
@@ -50,6 +40,10 @@ model WalletTransaction {
   type           TransactionType
   description    String
   idempotencyKey String?
+  
+  senderName     String?
+  receiverName   String?
+
   createdAt      DateTime        @default(now())
 
   @@index([walletId, createdAt])

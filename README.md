@@ -1,6 +1,6 @@
 # PostgreSQL ACID Transactions API
 
-A high-concurrency Node.js, Express & TypeScript financial backend engine powered by PostgreSQL and Prisma ORM. Engineered for zero-data-loss P2P atomic digital wallet transfers, user provisioning pipelines, pessimistic row-locking race-condition prevention, strict input sanitization, and multi-layered duplicate protection.
+A high-concurrency Node.js, Express & TypeScript financial backend engine powered by PostgreSQL and Prisma ORM. Engineered for zero-data-loss P2P atomic digital wallet transfers, user provisioning pipelines, pessimistic row-locking race-condition prevention, automated debt recovery, double-entry reversal mechanics, strict input sanitization, and multi-layered audit logging.
 
 ---
 
@@ -22,41 +22,37 @@ A high-concurrency Node.js, Express & TypeScript financial backend engine powere
 * **Relational Schema Setup:** Establishes strict 1-to-1 relationships between `User` and `Wallet`, along with normalized `Order`, `OrderItem`, and `WalletTransaction` ledgers.
 
 ### 🛡️ Phase 3: Financial Prevention Layer (P2P Atomic Transfers)
-The system implements a 6-tier security and consistency architecture for high-concurrency wallet transfers:
+The system implements a security and consistency architecture for high-concurrency wallet transfers:
 
-1. **ACID Atomic Transfers & Rollback Guarantees:**
-   * Executed within Prisma's interactive `$transaction`. If any ledger entry or balance mutation fails, the database automatically rolls back all state changes completely.
-2. **Pessimistic Row Locking (`FOR UPDATE`) & Deadlock Prevention:**
-   * Executes raw PostgreSQL SQL (`SELECT id FROM "Wallet" WHERE "userId" = $1 FOR UPDATE`) to acquire exclusive database row locks.
-   * **Deterministic Lock Ordering:** Sender and Receiver User IDs are sorted alphabetically (`[senderUserId, receiverUserId].sort()`) prior to acquiring locks. This guarantees concurrent bidirectional transfers (User A → B and User B → A) lock resources in identical order, completely eliminating database deadlocks.
-3. **Strict Input Guard & Payload Sanitization (`parseAndValidateAmount`):**
-   * Enforces strict regex patterns (`/^\d+(\.\d{1,2})?$/`) permitting only positive values with up to 2 decimal places.
-   * Rejects alphabetic strings (`gh34`), operator exploits (`*10`), negative amounts (`-100`), zero transactions (`0`), float precision exploits (> 2 decimal places), non-numeric types, and self-transfers (`senderUserId === receiverUserId`).
-4. **Idempotency Middleware Protection:**
-   * Validates `x-idempotency-key` HTTP headers to prevent duplicate processing caused by rapid UI button clicks or network retries.
-5. **5-Second Short-Window Duplicate Protection:**
-   * In-database defense check that intercepts rapid duplicate requests even when idempotency headers are missing. Rejects transactions if an identical transfer (same sender, same receiver, exact same amount) was recorded within the last 5 seconds.
-6. **Double-Entry Accounting Ledger:**
-   * Creates paired, immutable audit records (`DEBIT` entry for the sender and `CREDIT` entry for the receiver) in `WalletTransaction` for every transfer.
+1. **ACID Atomic Transfers & Rollback Guarantees:** Executed within Prisma's interactive `$transaction`. If any ledger entry or balance mutation fails, the database automatically rolls back all state changes completely.
+2. **Pessimistic Row Locking (`FOR UPDATE`) & Deadlock Prevention:** Executes raw SQL (`SELECT id FROM "Wallet" WHERE "userId" = $1 FOR UPDATE`) to acquire exclusive row locks sorted alphabetically by User ID (`[senderUserId, receiverUserId].sort()`), completely eliminating database deadlocks during concurrent transfers.
+3. **Strict Input Guard & Payload Sanitization (`parseAndValidateAmount`):** Enforces strict regex patterns (`/^\d+(\.\d{1,2})?$/`) permitting only positive values up to 2 decimal places. Rejects invalid strings, operator exploits, zero transactions, and self-transfers.
+4. **Idempotency Middleware & 5-Sec Short-Window Protection:** Validates `x-idempotency-key` HTTP headers while maintaining an in-database 5-second duplicate check window to intercept rapid repeated requests.
+5. **Double-Entry Accounting Ledger:** Creates paired, immutable audit records (`DEBIT` for sender, `CREDIT` for receiver) capturing full details and human-readable names (`senderName`, `receiverName`).
+
+### 🔄 Phase 4: Financial Recovery, Reversal Engine & Debt Management
+1. **System Reserve Float Isolation:** Integrates a system-level float user (`system.reserve@bank.internal`) isolated from standard P2P transfer routes to absorb overdraft risks during reversals.
+2. **Double-Entry Reversal Engine:** Reverses erroneous primary `DEBIT` entries atomically using paired ledger entries (`REVERSAL_CREDIT` to sender, `REVERSAL_DEBIT` from receiver) while guaranteeing zero double-reversal through explicit transaction tracking.
+3. **Negative Balance Overdraft & Status Guarding:** If a receiver spends funds prior to a transaction reversal, their balance drops into a negative deficit (debt). The system automatically transitions their account status to `RESTRICTED`, blocking any outgoing P2P transfers until the debt is cleared.
+4. **Automated Debt Offset on Deposit:** Processing incoming deposits (`POST /api/wallets/deposit`) automatically diverts incoming funds to repay system reserve debt first. Once the balance returns to non-negative, the wallet status is automatically restored to `ACTIVE`.
+5. **Human-Readable Audit Trail:** Enriches all transaction records with `senderName` and `receiverName` alongside transaction IDs and idempotency keys for instant visual database auditing and reporting.
 
 ---
 
 ## 🗄️ Database Schema Design
 
-The relational model utilizes PostgreSQL-specific features to ensure high data integrity and auditability:
-
 * **`User`**: Core identity table. Indexed on `email` for rapid authentication lookups.
-* **`Wallet`**: Enforces a strictly `1-to-1` relationship with `User`. Uses `Decimal(12, 2)` to eliminate floating-point arithmetic rounding errors.
-* **`WalletTransaction`**: Immutable ledger recording `CREDIT` and `DEBIT` events. Uses a composite index on `[walletId, createdAt]` for fast historical queries.
-* **`Product`**: Inventory table incorporating `JSONB` for `metadata`, allowing flexible schema-less attributes (e.g., dynamic hardware specifications) within structured SQL tables.
-* **`Order` & `OrderItem`**: Normalized checkout records representing exact snapshot pricing and relational integrity at purchase time.
+* **`Wallet`**: Enforces a `1-to-1` relationship with `User`. Tracks `balance` (`Decimal(12,2)`) and `status` (`ACTIVE`, `FROZEN`, `RESTRICTED`).
+* **`WalletTransaction`**: Immutable ledger recording `CREDIT`, `DEBIT`, `REVERSAL_CREDIT`, and `REVERSAL_DEBIT` events. Contains `idempotencyKey`, `senderName`, `receiverName`, and composite indexing on `[walletId, createdAt]`.
+* **`Product`**: Inventory table incorporating `JSONB` for `metadata`, allowing flexible schema-less attributes.
+* **`Order` & `OrderItem`**: Normalized checkout records representing snapshot pricing and purchasing relational integrity.
 
 ---
 
 ## 🚀 Local Development Setup
 
 ### 1. Prerequisites
-Ensure a local PostgreSQL instance is running. Define your connection string and application port in a `.env` file at the project root:
+Define your connection string and application port in a `.env` file at the project root:
 
 ```env
 DATABASE_URL="postgresql://username:password@localhost:5432/postgres_acid_db"
@@ -65,42 +61,31 @@ PORT=5000
 
 ### 2. Initialization Workflow
 
-Execute the following sequence to bootstrap the environment:
-
 ```bash
 # 1. Install dependencies
 npm install
 
-# 2. Apply database migrations
-npm run db:migrate
+# 2. Apply database schema changes
+npx prisma db push
 
 # 3. Generate Prisma Client bindings
-npm run db:generate
+npx prisma generate
 
-# 4. Seed initial state (Users, Wallets, Products)
+# 4. Seed initial state (Users, Wallets, System Reserve Float)
 npx prisma db seed
-
-# 5. Launch development server with hot-reloading
-npm run dev
 ```
 
 ### 3. Automated CLI Test Suite
 
-Execute the comprehensive CLI test suite to verify atomic transactions, payload validation, exploit rejection, and duplicate guards:
+Execute CLI test suites to verify atomic transfers, financial reversals, debt recovery, payload validation, and status guards:
 
 ```bash
+# Atomic Wallet Transfer & Guard Test Suite
 npx tsx scripts/run-atomic-wallet-transfer-test.ts
-```
 
-**CLI Test Suite Coverage:**
-* ✅ **Test 1:** Valid P2P Transfer ($50.00) & Real-time Balance Verification
-* ✅ **Test 2:** Garbage String Exploit Rejection (`'gh34'`)
-* ✅ **Test 3:** Operator Exploit Rejection (`'*10'`)
-* ✅ **Test 4:** Negative Value Exploit Rejection (`-100`)
-* ✅ **Test 5:** Zero Amount Transfer Rejection (`0`)
-* ✅ **Test 6:** Invalid Decimal Precision Rejection (`10.1234`)
-* ✅ **Test 7:** Self-Transfer Prevention Guard
-* ✅ **Test 8:** 5-Second Short-Window Duplicate Protection Guard
+# Financial Recovery & Debt Offset Test Suite
+npx tsx scripts/run-financial-recovery-test.ts
+```
 
 ---
 
@@ -110,16 +95,17 @@ npx tsx scripts/run-atomic-wallet-transfer-test.ts
 
 | Method | Endpoint | Description | Payload Example |
 | :--- | :--- | :--- | :--- |
-| `POST` | `/api/users/signup` | Executes an atomic `$transaction` to persist a `User` and provision a default `$1000.00` wallet balance. | `{"name": "Anas Khalid", "email": "anas@example.com"}` |
-| `GET` | `/api/users` | Aggregates all registered users and their relational wallet context. | *None* |
+| `POST` | `/api/users/signup` | Atomically creates a `User` and provisions a default `$1000.00` wallet. | `{"name": "Anas", "email": "anas@example.com"}` |
+| `GET` | `/api/users` | Lists registered users and relational wallet context. | *None* |
 
 ### 💳 Wallet Module (`/api/wallets`)
 
 | Method | Endpoint | Description | Payload / Headers |
 | :--- | :--- | :--- | :--- |
-| `GET` | `/api/wallets` | Retrieves a list of all operational wallets. | *None* |
-| `GET` | `/api/wallets/:userId` | Looks up a specific wallet balance utilizing the `userId` foreign key. | *None* |
-| `POST` | `/api/wallets/transfer` | Executes high-concurrency P2P atomic wallet transfer with row locking & duplicate guards. | **Headers:** `x-idempotency-key: <UUID>`<br>**Body:** `{"senderUserId": "f94a089f-...", "receiverUserId": "c5d7e043-...", "amount": 50.00}` |
+| `GET` | `/api/wallets` | Retrieves all active and restricted wallets. | *None* |
+| `POST` | `/api/wallets/transfer` | High-concurrency P2P atomic transfer with status checks & row-locking. | **Headers:** `x-idempotency-key: <UUID>`<br>**Body:** `{"senderUserId": "...", "receiverUserId": "...", "amount": 60.00}` |
+| `POST` | `/api/wallets/reverse` | Executes double-entry reversal with negative balance overdraft handling. | **Headers:** `x-idempotency-key: <UUID>`<br>**Body:** `{"transactionId": "..."}` |
+| `POST` | `/api/wallets/deposit` | Deposits funds into wallet, automatically clearing active system debt if restricted. | **Headers:** `x-idempotency-key: <UUID>`<br>**Body:** `{"userId": "...", "amount": 100.00}` |
 
 ### 📦 Product Module (`/api/products`)
 
@@ -134,7 +120,7 @@ npx tsx scripts/run-atomic-wallet-transfer-test.ts
 - [x] **Phase 1:** Core Initialization, TS Configurations & Prisma v7 DB Connection.
 - [x] **Phase 2:** User Provisioning Pipeline with Atomic Wallet Initialization.
 - [x] **Phase 3:** P2P Atomic Ledger Transfers & Prevention Layer (ACID, `FOR UPDATE` Row Locking, Idempotency Middleware, 5-Sec Short-Window Guard, Strict Input Guard, CLI Test Suite).
-- [ ] **Phase 4:** Financial Recovery & Reversal Engine (System Reserve Float Wallet, Double-Entry Reversal Engine, Overdraft & Negative Balance Math, Auto Debt Offset on Deposit, Reconciliation Cron Job).
+- [x] **Phase 4:** Financial Recovery & Reversal Engine (System Reserve Float Wallet, Double-Entry Reversal Engine, Overdraft & Negative Balance Math, Auto Debt Offset on Deposit, Audit Names Integration).
 - [ ] **Phase 5:** PostgreSQL JSONB Filtering Engine (Dynamic parameter searching via JSONB queries & GIN indexing).
 - [ ] **Phase 6:** Database Indexing & Query Performance Benchmarking (`EXPLAIN ANALYZE`, B-Tree / GIN tuning).
 - [ ] **Phase 7:** Immutable Audit Logging, Soft Deletes & Cursor-Based Pagination.
