@@ -5,7 +5,8 @@ import {
   reverseTransaction,
   depositFunds,
   getAllWallets,
-  getWalletByUserId
+  getWalletByUserId,
+  getWalletTransactions
 } from "../controllers/wallet.controller";
 
 const router = Router();
@@ -13,7 +14,10 @@ const router = Router();
 router.get("/", getAllWallets);
 router.get("/:userId", getWalletByUserId);
 
-// Attach Idempotency Middleware to the transfer POST endpoint
+// Cursor-Based Paginated Ledger Route
+router.get("/:walletId/transactions", getWalletTransactions);
+
+// Attach Idempotency Middleware to financial POST endpoints
 router.post("/transfer", idempotencyMiddleware, transferFunds);
 router.post("/reverse", idempotencyMiddleware, reverseTransaction);
 router.post("/deposit", idempotencyMiddleware, depositFunds);

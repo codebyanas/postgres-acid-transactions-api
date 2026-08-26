@@ -3,7 +3,7 @@ import { getProducts, searchProductsByJsonb } from "../controllers/product.contr
 
 const router = Router();
 
-// Specific routes pehle aate hain taake `/search` path match ho sake
+// Specific routes first to ensure proper matching
 router.get("/search", searchProductsByJsonb);
 router.get("/", getProducts);
 
