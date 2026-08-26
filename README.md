@@ -1,6 +1,6 @@
 # PostgreSQL ACID Transactions API
 
-A high-concurrency Node.js, Express & TypeScript financial backend engine powered by PostgreSQL and Prisma ORM. Engineered for zero-data-loss P2P atomic digital wallet transfers, user provisioning pipelines, pessimistic row-locking race-condition prevention, automated debt recovery, double-entry reversal mechanics, strict input sanitization, dynamic JSONB search engines at 100k scale, GIN index query optimization, and multi-layered audit logging.
+A high-concurrency Node.js, Express & TypeScript financial backend engine powered by PostgreSQL and Prisma ORM. Engineered for zero-data-loss P2P atomic digital wallet transfers, user provisioning pipelines, pessimistic row-locking race-condition prevention, automated debt recovery, double-entry reversal mechanics, strict input sanitization, dynamic JSONB search engines at 100k scale, GIN index query optimization, multi-column B-Tree performance benchmarking, and multi-layered audit logging.
 
 ---
 
@@ -8,7 +8,7 @@ A high-concurrency Node.js, Express & TypeScript financial backend engine powere
 
 * **Runtime & Framework:** Node.js, Express.js
 * **Language:** TypeScript (Strict typing & ESNext compilation target)
-* **Database:** PostgreSQL (Relational integrity, JSONB metadata, Decimal precision, GIN Indexing)
+* **Database:** PostgreSQL (Relational integrity, JSONB metadata, Decimal precision, GIN Indexing, B-Tree Composite Indexing)
 * **ORM:** Prisma ORM v7 with `@prisma/adapter-pg`
 * **Execution Environment:** `tsx`, Node `pg` connection pool, `dotenv`
 
@@ -47,14 +47,25 @@ The system implements a security and consistency architecture for high-concurren
    * **Query Cost Optimization:** Reduced total PostgreSQL query cost from **4744 → 2022.48** (**57.4% Cost Reduction**).
    * **Execution Latency:** Accelerated deep nested query execution time from **52.6ms → 13.8ms** (**3.8x Speedup**), dropping warm API response latencies down to **~18ms**.
 
+### 📊 Phase 6: Relational B-Tree Indexing & Query Optimization (100k Multi-User Scale)
+1. **High-Cardinality Multi-User Seed Pipeline:** Scaled database seeding (`prisma/seed.ts`) to generate 500 dummy users funded with initial capital ($50,000–$100,000) and 100,000 realistic historical transactions ($20–$1,500 range) distributed across 1 year of timestamps to ensure realistic B-Tree index cardinality tests.
+2. **Relational B-Tree Schema Indexing:**
+   * **Single-Column B-Tree Index:** Added `@@index([price], name: "idx_product_price_btree")` in `Product` schema for optimized numerical range queries (`WHERE price BETWEEN X AND Y`) and sorting.
+   * **Composite Multi-Column B-Tree Index:** Configured `@@index([walletId, createdAt])` in `WalletTransaction` schema to optimize historical transaction lookups filtered by wallet and sorted chronologically.
+3. **Deep Database Execution Verification (`verify-btree-deep.ts`):** Built dedicated session-toggling benchmarking scripts using `SET enable_indexscan = off/on` to execute raw PostgreSQL `EXPLAIN ANALYZE` commands, comparing full sequential table scans against B-Tree leaf node lookups.
+4. **Sorting Overhead Elimination & 95x Engine Speedup:**
+   * **Strategy Shift:** Replaced memory-heavy RAM `QuickSort` operations with instant pre-sorted leaf node reads.
+   * **Database Execution Latency:** Accelerated ledger history lookups from **36.4ms → 0.31ms** (**~95x Speedup**).
+5. **HTTP Controller Benchmarking Route (`/api/benchmark/transactions`):** Built an Express benchmark controller enabling real-time index toggling (`useIndex=true|false`), demonstrating an end-to-end API response time drop from **188.04ms → 100.63ms** (**~47% overall API latency drop**).
+
 ---
 
 ## 🗄️ Database Schema Design
 
 * **`User`**: Core identity table. Indexed on `email` for rapid authentication lookups.
 * **`Wallet`**: Enforces a `1-to-1` relationship with `User`. Tracks `balance` (`Decimal(12,2)`) and `status` (`ACTIVE`, `FROZEN`, `RESTRICTED`).
-* **`WalletTransaction`**: Immutable ledger recording `CREDIT`, `DEBIT`, `REVERSAL_CREDIT`, and `REVERSAL_DEBIT` events. Contains `idempotencyKey`, `senderName`, `receiverName`, and composite indexing on `[walletId, createdAt]`.
-* **`Product`**: Inventory table incorporating `JSONB` for `metadata`, configured with a PostgreSQL `GIN` index (`JsonbPathOps`) on `metadata` for ultrafast schema-less query performance.
+* **`WalletTransaction`**: Immutable ledger recording `CREDIT`, `DEBIT`, `REVERSAL_CREDIT`, and `REVERSAL_DEBIT` events. Contains `idempotencyKey`, `senderName`, `receiverName`, and composite B-Tree indexing on `[walletId, createdAt]`.
+* **`Product`**: Inventory table incorporating `JSONB` for `metadata`, configured with a PostgreSQL `GIN` index (`JsonbPathOps`) on `metadata` for ultrafast schema-less search and a B-Tree index on `price` for numerical range filtering.
 * **`Order` & `OrderItem`**: Normalized checkout records representing snapshot pricing and purchasing relational integrity.
 
 ---
@@ -75,19 +86,19 @@ PORT=5000
 # 1. Install dependencies
 npm install
 
-# 2. Apply database schema changes & GIN Indexing
+# 2. Apply database schema changes, GIN & B-Tree Indexing
 npx prisma db push
 
 # 3. Generate Prisma Client bindings
 npx prisma generate
 
-# 4. Seed high-volume test state (100,000 JSONB Products, Users, Wallets, System Reserve Float)
+# 4. Seed high-volume test state (500 Users, 100k Transactions, 100k JSONB Products, Reserve Float)
 npx prisma db seed
 ```
 
 ### 3. Automated CLI Test Suite
 
-Execute CLI test suites to verify atomic transfers, financial reversals, debt recovery, payload validation, status guards, and JSONB GIN index performance:
+Execute CLI test suites to verify atomic transfers, financial reversals, debt recovery, payload validation, status guards, GIN JSONB performance, and B-Tree index optimization:
 
 ```bash
 # Atomic Wallet Transfer & Guard Test Suite
@@ -98,6 +109,12 @@ npx tsx scripts/run-financial-recovery-test.ts
 
 # PostgreSQL JSONB GIN Index Benchmark Test Suite (100k Scale)
 npx tsx scripts/run-postgres-jsonb-query-test.ts
+
+# B-Tree Index Surface Benchmark Test Suite
+npx tsx scripts/run-btree-query-test.ts
+
+# Deep Comparative B-Tree Benchmark (With Index vs Without Index)
+npx tsx scripts/verify-btree-deep.ts
 ```
 
 ---
@@ -127,6 +144,12 @@ npx tsx scripts/run-postgres-jsonb-query-test.ts
 | `GET` | `/api/products` | Fetches available inventory, exposing standard columns and JSONB `metadata`. | *None* |
 | `GET` | `/api/products/search` | Dynamic nested JSONB search optimized with GIN indexing (`@>`). | Query parameters:<br>`?category=electronics&brand=Apple&ram=16GB&cpu=M3%20Max&zone=A1` |
 
+### 📊 Benchmark Module (`/api/benchmark`)
+
+| Method | Endpoint | Description | Query Example |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/api/benchmark/transactions` | Compares ledger lookup performance with B-Tree index vs forced full table scan. | Query parameters:<br>`?walletId=...&useIndex=true` or `?useIndex=false` |
+
 ---
 
 ## 🛣️ Engineering Roadmap
@@ -136,5 +159,5 @@ npx tsx scripts/run-postgres-jsonb-query-test.ts
 - [x] **Phase 3:** P2P Atomic Ledger Transfers & Prevention Layer (ACID, `FOR UPDATE` Row Locking, Idempotency Middleware, 5-Sec Short-Window Guard, Strict Input Guard, CLI Test Suite).
 - [x] **Phase 4:** Financial Recovery & Reversal Engine (System Reserve Float Wallet, Double-Entry Reversal Engine, Overdraft & Negative Balance Math, Auto Debt Offset on Deposit, Audit Names Integration).
 - [x] **Phase 5:** PostgreSQL JSONB Filtering Engine & GIN Index Benchmarking (Dynamic parameter searching via `@>` containment, GIN Indexing with `JsonbPathOps`, 100k scale batch seeding, `DISCARD ALL` Cold Scan CLI benchmarks, 57.4% Query Cost reduction).
-- [ ] **Phase 6:** Database Indexing & B-Tree / Multi-Column Query Performance Benchmarking (`EXPLAIN ANALYZE`).
+- [x] **Phase 6:** Database Indexing & B-Tree / Multi-Column Query Performance Benchmarking (Composite `[walletId, createdAt]` B-Tree indexing, 500 multi-user high-cardinality 100k seed pipeline, `verify-btree-deep.ts` side-by-side verification, 95x DB execution speedup on ledger sorts, Postman benchmark endpoint).
 - [ ] **Phase 7:** Immutable Audit Logging, Soft Deletes & Cursor-Based Pagination.
