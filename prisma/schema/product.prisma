@@ -6,4 +6,8 @@ model Product {
   metadata   Json
   orderItems OrderItem[]
   createdAt  DateTime    @default(now())
+
+  // PostgreSQL GIN Index for JSONB metadata column optimization
+  // Uses JsonbPathOps operator class to accelerate `@>` containment queries for dynamic nested filtering
+  @@index([metadata(ops: JsonbPathOps)], type: Gin, name: "idx_product_metadata_gin")
 }
