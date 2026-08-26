@@ -4,6 +4,7 @@ import morgan from "morgan";
 import userRoutes from "./routes/user.routes";
 import productRoutes from "./routes/product.routes";
 import walletRoutes from "./routes/wallet.routes";
+import benchmarkRoutes from './routes/benchmark.routes'
 
 const app: Application = express();
 
@@ -14,6 +15,7 @@ app.use(express.json());
 app.use("/api/users", userRoutes);
 app.use("/api/products", productRoutes);
 app.use("/api/wallet", walletRoutes);
+app.use("/api/benchmark", benchmarkRoutes);
 
 app.get("/health", (req: Request, res: Response) => {
   res.json({ status: "OK", message: "Server is running smoothly!" });
