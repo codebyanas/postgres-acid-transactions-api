@@ -12,6 +12,7 @@ import {
   adminManualReversal,
   adminDebtOverride
 } from "../controllers/wallet.controller";
+import { triggerManualReconciliation } from "../controllers/wallet.controller";
 
 const router = Router();
 
@@ -24,6 +25,14 @@ router.get("/:walletId/transactions", getWalletTransactions);
 router.post("/transfer", idempotencyMiddleware, transferFunds);
 router.post("/reverse", idempotencyMiddleware, reverseTransaction);
 router.post("/deposit", idempotencyMiddleware, depositFunds);
+
+// On-Demand System Reconciliation Trigger Endpoint (ADMIN Guarded)
+router.post(
+  "/admin/reconcile",
+  authenticateJWT,
+  requireRole(["ADMIN"]),
+  triggerManualReconciliation
+);
 
 // Administrative Operations (Locked with Auth JWT, ADMIN RBAC Guard & Audit Logging)
 router.patch(

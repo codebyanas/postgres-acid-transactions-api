@@ -21,12 +21,17 @@ async function main() {
 
   // Foreign key dependency cleanup
   console.log("🧹 Cleaning up old database records...");
+  await prisma.auditLog.deleteMany().catch(() => {});
   await prisma.orderItem.deleteMany().catch(() => {});
   await prisma.order.deleteMany().catch(() => {});
   await prisma.walletTransaction.deleteMany().catch(() => {});
   await prisma.wallet.deleteMany().catch(() => {});
   await prisma.user.deleteMany().catch(() => {});
   await prisma.product.deleteMany().catch(() => {});
+
+  // In-memory map to track exact ledger balances across all wallets to ensure zero reconciliation disparity
+  const walletBalanceMap = new Map<string, number>();
+  const initialTxBatch: any[] = [];
 
   // 1. Core / Reserved Users Setup
   console.log("👤 Creating Primary & System Users...");
@@ -57,6 +62,28 @@ async function main() {
     include: { wallet: true },
   });
 
+  // Register baseline balances and generate initial CREDIT ledger entries for core users
+  const coreWallets = [
+    { wallet: systemReserveUser.wallet!, user: systemReserveUser, balance: 1000000.0 },
+    { wallet: user1.wallet!, user: user1, balance: 100000.0 },
+    { wallet: user2.wallet!, user: user2, balance: 100000.0 },
+  ];
+
+  for (const item of coreWallets) {
+    walletBalanceMap.set(item.wallet.id, item.balance);
+    initialTxBatch.push({
+      id: randomUUID(),
+      walletId: item.wallet.id,
+      amount: item.balance,
+      type: TransactionType.CREDIT,
+      description: "Initial System Capital Deposit",
+      senderName: "SYSTEM_RESERVE",
+      receiverName: item.user.name,
+      idempotencyKey: `seed_initial_${randomUUID()}`,
+      createdAt: faker.date.past({ years: 2 }),
+    });
+  }
+
   // Pool of wallet references for transactions
   const walletPool: { walletId: string; userName: string }[] = [
     { walletId: systemReserveUser.wallet!.id, userName: systemReserveUser.name },
@@ -75,6 +102,7 @@ async function main() {
     const userId = randomUUID();
     const walletId = randomUUID();
     const userName = faker.person.fullName();
+    const initialCapital = parseFloat(faker.finance.amount({ min: 50000, max: 100000, dec: 2 }));
 
     usersData.push({
       id: userId,
@@ -85,16 +113,33 @@ async function main() {
     walletsData.push({
       id: walletId,
       userId: userId,
-      balance: parseFloat(faker.finance.amount({ min: 50000, max: 100000, dec: 2 })),
+      balance: initialCapital,
       status: "ACTIVE" as const,
     });
 
     walletPool.push({ walletId, userName });
+    walletBalanceMap.set(walletId, initialCapital);
+
+    // Create matching initial CREDIT transaction entry to balance audit ledgers
+    initialTxBatch.push({
+      id: randomUUID(),
+      walletId: walletId,
+      amount: initialCapital,
+      type: TransactionType.CREDIT,
+      description: "Initial Capital Seed Grant",
+      senderName: "SYSTEM_RESERVE",
+      receiverName: userName,
+      idempotencyKey: `seed_initial_${randomUUID()}`,
+      createdAt: faker.date.past({ years: 2 }),
+    });
   }
 
   await prisma.user.createMany({ data: usersData });
   await prisma.wallet.createMany({ data: walletsData });
-  console.log(`✅ ${TOTAL_USERS} Users and Wallets created successfully!`);
+
+  // Bulk insert all initial baseline CREDIT transactions
+  await prisma.walletTransaction.createMany({ data: initialTxBatch });
+  console.log(`✅ ${TOTAL_USERS} Users, Wallets, and Initial Credit Transactions created successfully!`);
 
   // 3. Bulk Seed 100,000 Historical Wallet Transactions for B-Tree Index Benchmarking
   const TOTAL_TRANSACTIONS = 100000;
@@ -114,10 +159,19 @@ async function main() {
 
       const amount = parseFloat(faker.finance.amount({ min: 20, max: 1500, dec: 2 }));
       const isDebit = faker.datatype.boolean();
+      const targetWalletId = isDebit ? sender.walletId : receiver.walletId;
+
+      // Update in-memory wallet balance map to reflect every historical DEBIT/CREDIT transaction
+      const currentBalance = walletBalanceMap.get(targetWalletId) || 0;
+      if (isDebit) {
+        walletBalanceMap.set(targetWalletId, parseFloat((currentBalance - amount).toFixed(2)));
+      } else {
+        walletBalanceMap.set(targetWalletId, parseFloat((currentBalance + amount).toFixed(2)));
+      }
 
       txBatch.push({
         id: randomUUID(),
-        walletId: isDebit ? sender.walletId : receiver.walletId,
+        walletId: targetWalletId,
         amount: amount,
         type: isDebit ? TransactionType.DEBIT : TransactionType.CREDIT,
         description: isDebit
@@ -133,6 +187,17 @@ async function main() {
     await prisma.walletTransaction.createMany({ data: txBatch });
     console.log(`✅ Transactions Progress: ${i + TX_BATCH_SIZE} / ${TOTAL_TRANSACTIONS} inserted`);
   }
+
+  // Synchronize all final calculated balances directly into the Wallet database records
+  console.log("🔄 Synchronizing final computed balances to Wallet table...");
+  const updatePromises = Array.from(walletBalanceMap.entries()).map(([walletId, finalBalance]) =>
+    prisma.wallet.update({
+      where: { id: walletId },
+      data: { balance: finalBalance },
+    })
+  );
+  await Promise.all(updatePromises);
+  console.log("✅ All wallet balances synchronized with transaction ledger history!");
 
   // 4. Bulk Seed 100,000 JSONB Products
   const categories = ["electronics", "apparel", "footwear", "accessories"];

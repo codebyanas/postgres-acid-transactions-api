@@ -5,6 +5,7 @@ import { executeTransactionReversal, depositAndClearDebt } from "../lab/financia
 import { encodeCursor, decodeCursor } from "../utils/cursor.util";
 import { createAuditLog } from "../utils/auditLogger.util";
 import { AuditAction, WalletStatus } from "@prisma/client";
+import { runReconciliationAudit } from "../jobs/reconciliation.cron";
 
 /**
  * Controller endpoint wrapper for P2P Wallet Transfers.
@@ -385,6 +386,43 @@ export const adminDebtOverride = async (req: Request, res: Response): Promise<vo
       success: true,
       message: "Wallet balance adjusted successfully via admin override.",
       data: updatedWallet,
+    });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+/**
+ * Admin endpoint to trigger on-demand system reconciliation.
+ * Audits all wallets, checks balance integrity, and logs RECONCILIATION_RUN audit log.
+ */
+export const triggerManualReconciliation = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const user = (req as any).user;
+
+    // Run full balance and anomaly audit worker
+    const auditResults = await runReconciliationAudit();
+
+    // Create AuditLog entry for manual trigger
+    if (user) {
+      await createAuditLog({
+        actorId: user.id,
+        role: user.role,
+        action: AuditAction.RECONCILIATION_RUN,
+        resource: "SystemReconciliation",
+        resourceId: `RECON_${Date.now()}`,
+        ipAddress: req.ip || "127.0.0.1",
+        metadata: {
+          triggeredBy: user.email,
+          auditSummary: auditResults,
+        },
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Manual system balance reconciliation executed successfully.",
+      data: auditResults,
     });
   } catch (error: any) {
     res.status(500).json({ success: false, error: error.message });

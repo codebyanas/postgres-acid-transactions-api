@@ -1,9 +1,12 @@
+// Added DISPARITY_DETECTED and RECONCILIATION_RUN enum values for automated audit reporting
 enum AuditAction {
   SOFT_DELETE
   RESTORE
   ACCOUNT_FREEZE
   MANUAL_REVERSAL
   DEBT_OVERRIDE
+  DISPARITY_DETECTED   // Logged when calculated ledger sum !== stored wallet balance
+  RECONCILIATION_RUN   // Logged when an admin manually triggers a full system audit
 }
 
 model AuditLog {
