@@ -94,14 +94,22 @@ export const executeAtomicTransfer = async (
       `;
     }
 
-    // 2. Fetch Sender Wallet with User details
-    const senderWallet = await tx.wallet.findUnique({
-      where: { userId: senderUserId },
+    // 2. Fetch Sender Wallet with Soft-Delete & Lifecycle Guards
+    const senderWallet = await tx.wallet.findFirst({
+      where: {
+        userId: senderUserId,
+        deletedAt: null,
+        user: {
+          deletedAt: null,
+        },
+      },
       include: { user: true },
     });
 
     if (!senderWallet) {
-      throw new Error("Sender wallet record not found.");
+      throw new Error(
+        "Transaction failed: Sender wallet or user account is non-existent or soft-deleted."
+      );
     }
 
     if (senderWallet.status === WalletStatus.RESTRICTED) {
@@ -114,6 +122,10 @@ export const executeAtomicTransfer = async (
       throw new Error(
         "Account is FROZEN by administrative lock. Transactions prohibited."
       );
+    }
+
+    if (senderWallet.status !== WalletStatus.ACTIVE) {
+      throw new Error("Account is not ACTIVE. Transactions prohibited.");
     }
 
     // 3. 5-Second Short-Window Duplicate Check
@@ -142,14 +154,22 @@ export const executeAtomicTransfer = async (
       );
     }
 
-    // 5. Fetch Receiver Wallet with User details
-    const receiverWallet = await tx.wallet.findUnique({
-      where: { userId: receiverUserId },
+    // 5. Fetch Receiver Wallet with Soft-Delete & Freeze Guards
+    const receiverWallet = await tx.wallet.findFirst({
+      where: {
+        userId: receiverUserId,
+        deletedAt: null,
+        user: {
+          deletedAt: null,
+        },
+      },
       include: { user: true },
     });
 
     if (!receiverWallet) {
-      throw new Error("Receiver wallet record not found.");
+      throw new Error(
+        "Transaction failed: Receiver wallet or user account is non-existent or soft-deleted."
+      );
     }
 
     if (receiverWallet.status === WalletStatus.FROZEN) {
@@ -158,12 +178,12 @@ export const executeAtomicTransfer = async (
 
     // 6. Perform Atomic Mutations
     const updatedSender = await tx.wallet.update({
-      where: { userId: senderUserId },
+      where: { id: senderWallet.id },
       data: { balance: { decrement: transferAmount } },
     });
 
     const updatedReceiver = await tx.wallet.update({
-      where: { userId: receiverUserId },
+      where: { id: receiverWallet.id },
       data: { balance: { increment: transferAmount } },
     });
 

@@ -3,6 +3,8 @@ import { prisma } from "../config/db";
 import { executeAtomicTransfer } from "../lab/atomic-wallet-transaction";
 import { executeTransactionReversal, depositAndClearDebt } from "../lab/financial-recovery";
 import { encodeCursor, decodeCursor } from "../utils/cursor.util";
+import { createAuditLog } from "../utils/auditLogger.util";
+import { AuditAction, WalletStatus } from "@prisma/client";
 
 /**
  * Controller endpoint wrapper for P2P Wallet Transfers.
@@ -167,7 +169,7 @@ export const getWalletTransactions = async (req: Request, res: Response): Promis
     const { walletId } = req.params;
     const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
     const cursorParam = req.query.cursor as string | undefined;
-    const skipParam = req.query.skip as string | undefined; // Offset support for Postman comparison
+    const skipParam = req.query.skip as string | undefined;
 
     let cursorObj: { id: string } | null = null;
     if (cursorParam) {
@@ -181,13 +183,11 @@ export const getWalletTransactions = async (req: Request, res: Response): Promis
       }
     }
 
-    // 1. Start High-Precision Timer before DB Query
     const startTime = performance.now();
 
     const transactions = await prisma.walletTransaction.findMany({
       where: { walletId: String(walletId) },
       take: limit + 1,
-      // If 'skip' query param exists, run Offset strategy. Otherwise run Cursor (Seek).
       ...(skipParam && !cursorObj
         ? { skip: parseInt(skipParam) }
         : cursorObj
@@ -196,7 +196,6 @@ export const getWalletTransactions = async (req: Request, res: Response): Promis
       orderBy: { createdAt: "desc" },
     });
 
-    // 2. End Timer after DB Query finishes
     const endTime = performance.now();
     const executionTimeMs = parseFloat((endTime - startTime).toFixed(3));
 
@@ -209,10 +208,9 @@ export const getWalletTransactions = async (req: Request, res: Response): Promis
       nextCursor = encodeCursor({ id: lastItem.id });
     }
 
-    // 3. Return 'executionTimeMs' in JSON response
     res.status(200).json({
       success: true,
-      executionTimeMs, // <-- DB Execution Time in Milliseconds
+      executionTimeMs,
       meta: {
         walletId,
         limit,
@@ -222,6 +220,171 @@ export const getWalletTransactions = async (req: Request, res: Response): Promis
         count: data.length,
       },
       data,
+    });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+/**
+ * Admin endpoint to freeze or unfreeze a user wallet.
+ * Generates an immutable ACCOUNT_FREEZE audit log entry.
+ */
+export const toggleWalletFreeze = async (req: Request, res: Response): Promise<void> => {
+  try {
+    // Explicitly cast walletId to string to resolve TS2322 type error
+    const walletId = req.params.walletId as string;
+    const { status } = req.body;
+    const user = (req as any).user;
+
+    if (!status || !Object.values(WalletStatus).includes(status)) {
+      res.status(400).json({
+        success: false,
+        error: `Invalid status provided. Allowed options: ${Object.values(WalletStatus).join(", ")}`,
+      });
+      return;
+    }
+
+    const existingWallet = await prisma.wallet.findUnique({
+      where: { id: walletId },
+    });
+
+    if (!existingWallet) {
+      res.status(404).json({ success: false, error: "Wallet record not found." });
+      return;
+    }
+
+    const updatedWallet = await prisma.wallet.update({
+      where: { id: walletId },
+      data: { status },
+    });
+
+    // Write audit log entry
+    if (user) {
+      await createAuditLog({
+        actorId: user.id,
+        role: user.role,
+        action: AuditAction.ACCOUNT_FREEZE,
+        resource: "Wallet",
+        resourceId: walletId,
+        ipAddress: req.ip || "127.0.0.1",
+        metadata: {
+          previousStatus: existingWallet.status,
+          newStatus: status,
+          userId: existingWallet.userId,
+        },
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Wallet status updated to ${status} successfully.`,
+      data: updatedWallet,
+    });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+/**
+ * Admin endpoint to execute a manual financial transaction reversal.
+ * Enforces mandatory idempotency key header and generates a MANUAL_REVERSAL audit log entry.
+ */
+export const adminManualReversal = async (req: Request, res: Response): Promise<void> => {
+  const { transactionId, reason } = req.body;
+  const idempotencyKey = (req.headers["x-idempotency-key"] || req.headers["idempotency-key"]) as string | undefined;
+
+  if (!idempotencyKey || typeof idempotencyKey !== "string" || idempotencyKey.trim() === "") {
+    res.status(400).json({
+      success: false,
+      error: "Missing required header: 'x-idempotency-key' is mandatory for manual reversals.",
+    });
+    return;
+  }
+
+  try {
+    const result = await executeTransactionReversal(transactionId, idempotencyKey.trim());
+
+    // Write immutable audit log entry for Manual Reversal action
+    if (req.user) {
+      await createAuditLog({
+        actorId: req.user.id,
+        role: req.user.role,
+        action: AuditAction.MANUAL_REVERSAL,
+        resource: "WalletTransaction",
+        resourceId: transactionId,
+        ipAddress: req.ip,
+        metadata: {
+          reason: reason || "Admin manual dispute resolution",
+          reversalResult: result,
+        },
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Manual transaction reversal executed successfully.",
+      data: result,
+    });
+  } catch (error: any) {
+    res.status(400).json({
+      success: false,
+      error: error.message || "Manual reversal operation failed.",
+    });
+  }
+};
+
+/**
+ * Admin endpoint to manually adjust a user balance or override negative debt.
+ * Generates a DEBT_OVERRIDE audit log entry.
+ */
+export const adminDebtOverride = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { walletId, newBalance, reason } = req.body;
+
+    if (newBalance === undefined || isNaN(Number(newBalance))) {
+      res.status(400).json({
+        success: false,
+        error: "Valid numeric 'newBalance' value is required for debt override.",
+      });
+      return;
+    }
+
+    const existingWallet = await prisma.wallet.findUnique({
+      where: { id: walletId },
+    });
+
+    if (!existingWallet) {
+      res.status(404).json({ success: false, error: "Wallet record not found." });
+      return;
+    }
+
+    const updatedWallet = await prisma.wallet.update({
+      where: { id: walletId },
+      data: { balance: newBalance },
+    });
+
+    // Write immutable audit log entry for Debt Override action
+    if (req.user) {
+      await createAuditLog({
+        actorId: req.user.id,
+        role: req.user.role,
+        action: AuditAction.DEBT_OVERRIDE,
+        resource: "Wallet",
+        resourceId: walletId,
+        ipAddress: req.ip,
+        metadata: {
+          previousBalance: existingWallet.balance,
+          overrideBalance: newBalance,
+          reason: reason || "Admin debt clearance / balance adjustment",
+        },
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Wallet balance adjusted successfully via admin override.",
+      data: updatedWallet,
     });
   } catch (error: any) {
     res.status(500).json({ success: false, error: error.message });
