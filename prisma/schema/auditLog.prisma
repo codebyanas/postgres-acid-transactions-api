@@ -1,0 +1,22 @@
+enum AuditAction {
+  ACCOUNT_FREEZE
+  MANUAL_REVERSAL
+  SOFT_DELETE
+  RESTORE
+  DEBT_OVERRIDE
+}
+
+model AuditLog {
+  id         String      @id @default(uuid())
+  actorId    String      // ID of the user/admin or 'SYSTEM' performing the action
+  role       UserRole    // Role of the entity performing the action
+  action     AuditAction // Specific type of administrative operation executed
+  resource   String      // Target table/entity (e.g., 'Product', 'Wallet')
+  resourceId String      // Target record unique identifier
+  ipAddress  String?     // Client IP address captured during the request
+  metadata   Json?       // JSON snapshot of state changes before/after operation
+  createdAt  DateTime    @default(now())
+
+  @@index([actorId])
+  @@index([resource, resourceId])
+}

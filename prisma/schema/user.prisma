@@ -11,13 +11,24 @@ enum TransactionType {
   REVERSAL_DEBIT
 }
 
+// User roles for Role-Based Access Control (RBAC)
+enum UserRole {
+  ADMIN
+  USER
+  SYSTEM
+}
+
 model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
+  id        String    @id @default(uuid())
+  email     String    @unique
   name      String
+  role      UserRole  @default(USER) // User access level definition
   wallet    Wallet?
   orders    Order[]
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
+
+  // Soft deletion timestamp for user identity lifecycle preservation
+  deletedAt DateTime?
 
   @@index([email])
 }
@@ -30,6 +41,9 @@ model Wallet {
   status       WalletStatus        @default(ACTIVE)
   transactions WalletTransaction[]
   updatedAt    DateTime            @updatedAt
+
+  // Soft deletion timestamp for wallet preservation
+  deletedAt    DateTime?
 }
 
 model WalletTransaction {
@@ -46,6 +60,7 @@ model WalletTransaction {
 
   createdAt      DateTime        @default(now())
 
+  // NOTE: WalletTransaction deliberately does NOT have deletedAt to maintain an immutable audit trail
   @@index([walletId, createdAt])
   @@index([idempotencyKey])
 }

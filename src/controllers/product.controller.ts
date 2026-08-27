@@ -1,10 +1,12 @@
 import { Request, Response } from "express";
 import { prisma } from "../config/db";
+import { createAuditLog } from "../utils/auditLogger.util";
+import { AuditAction } from "@prisma/client";
 import { encodeCursor, decodeCursor } from "../utils/cursor.util";
 
 /**
  * Fetch products using Cursor-Based (Seek) or Offset-Based (Skip) Pagination.
- * Includes executionTimeMs timer for Postman benchmarking.
+ * Automatically excludes soft-deleted records via Prisma Extension.
  */
 export const getProducts = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -66,6 +68,38 @@ export const getProducts = async (req: Request, res: Response): Promise<void> =>
   }
 };
 
+/**
+ * Fetch a single product by ID.
+ * Returns 404 if product does not exist or has been soft-deleted.
+ */
+export const getProductById = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const id = req.params.id as string;
+
+    const product = await prisma.product.findFirst({
+      where: { id },
+    });
+
+    if (!product) {
+      res.status(404).json({
+        success: false,
+        error: "Product not found or has been soft-deleted.",
+      });
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      data: product,
+    });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+/**
+ * Filter products using PostgreSQL JSONB deep matching.
+ */
 export const searchProductsByJsonb = async (req: Request, res: Response): Promise<void> => {
   try {
     const { category, brand, ram, storage, cpu, zone, connectivity, color } = req.query;
@@ -102,10 +136,12 @@ export const searchProductsByJsonb = async (req: Request, res: Response): Promis
 
     const startTime = performance.now();
 
+    // Query raw enforces deletedAt NULL check for JSONB search
     const products: any[] = await prisma.$queryRaw`
       SELECT id, title, price, stock, metadata
       FROM "Product"
       WHERE metadata @> ${jsonString}::jsonb
+        AND "deletedAt" IS NULL
     `;
 
     const endTime = performance.now();
@@ -117,6 +153,86 @@ export const searchProductsByJsonb = async (req: Request, res: Response): Promis
       count: products.length,
       filterApplied: metadataFilter,
       data: products,
+    });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+/**
+ * Soft delete a product record and automatically append an immutable audit log entry.
+ */
+export const softDeleteProduct = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const id = req.params.id as string;
+
+    const existingProduct = await prisma.product.findFirst({
+      where: { id },
+    });
+
+    if (!existingProduct) {
+      res.status(404).json({
+        success: false,
+        error: "Product not found or already soft-deleted.",
+      });
+      return;
+    }
+
+    // Mutate deletedAt timestamp via extension
+    await prisma.product.delete({
+      where: { id },
+    });
+
+    // Write immutable audit log entry for soft delete operation
+    if (req.user) {
+      await createAuditLog({
+        actorId: req.user.id,
+        role: req.user.role,
+        action: AuditAction.SOFT_DELETE,
+        resource: "Product",
+        resourceId: id,
+        ipAddress: req.ip,
+        metadata: { productTitle: (existingProduct as any).title },
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Product with ID ${id} soft-deleted successfully.`,
+    });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+/**
+ * Admin endpoint to restore a soft-deleted product and write audit trail.
+ */
+export const restoreProduct = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const id = req.params.id as string;
+
+    const restoredProduct = await (prisma.product as any).update({
+      where: { id },
+      data: { deletedAt: null },
+    });
+
+    // Write immutable audit log entry for restore operation
+    if (req.user) {
+      await createAuditLog({
+        actorId: req.user.id,
+        role: req.user.role,
+        action: AuditAction.RESTORE,
+        resource: "Product",
+        resourceId: id,
+        ipAddress: req.ip,
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Product with ID ${id} restored successfully.`,
+      data: restoredProduct,
     });
   } catch (error: any) {
     res.status(500).json({ success: false, error: error.message });

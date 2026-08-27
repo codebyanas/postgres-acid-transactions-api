@@ -2,6 +2,7 @@ import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
 import dotenv from "dotenv";
+import { softDeleteExtension } from "../extensions/softDelete.extension";
 
 dotenv.config();
 
@@ -26,13 +27,16 @@ pool.on("error", (err) => {
 });
 
 const adapter = new PrismaPg(pool);
-export const prisma = new PrismaClient({ adapter });
+const basePrisma = new PrismaClient({ adapter });
+
+// Apply Soft Delete extension to Prisma client instance
+export const prisma = basePrisma.$extends(softDeleteExtension);
 
 // Verify active database connection on application startup
 export const connectDB = async (): Promise<void> => {
   try {
-    await prisma.$queryRaw`SELECT 1`;
-    console.log("PostgreSQL connected successfully via Prisma v7.");
+    await basePrisma.$queryRaw`SELECT 1`;
+    console.log("PostgreSQL connected successfully via Prisma v7 with Soft Delete extension.");
   } catch (error) {
     console.error("Database connection failed:", error);
     process.exit(1);
@@ -42,7 +46,7 @@ export const connectDB = async (): Promise<void> => {
 // Safely close connection pool on application termination
 export const disconnectDB = async (): Promise<void> => {
   try {
-    await prisma.$disconnect();
+    await basePrisma.$disconnect();
     await pool.end();
     console.log("PostgreSQL connection pool closed gracefully.");
   } catch (error) {

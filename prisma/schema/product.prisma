@@ -7,6 +7,9 @@ model Product {
   orderItems OrderItem[]
   createdAt  DateTime    @default(now())
 
+  // Soft deletion timestamp for data preservation
+  deletedAt  DateTime?
+
   // GIN Index for JSONB Metadata
   @@index([metadata(ops: JsonbPathOps)], type: Gin, name: "idx_product_metadata_gin")
 
