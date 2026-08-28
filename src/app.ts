@@ -1,7 +1,7 @@
 import express, { Application, Request, Response } from "express";
 import cors from "cors";
 import morgan from "morgan";
-import helmet from "helmet"; // Security headers middleware
+import helmet from "helmet"; 
 import userRoutes from "./routes/user.routes";
 import productRoutes from "./routes/product.routes";
 import walletRoutes from "./routes/wallet.routes";
@@ -18,7 +18,12 @@ app.use(helmet());
 app.use(globalRateLimiter);
 
 app.use(cors());
-app.use(morgan("dev"));
+
+// Test environment me HTTP morgan logs ko silence karne ke liye check
+if (process.env.NODE_ENV !== "test") {
+  app.use(morgan("dev"));
+}
+
 app.use(express.json());
 
 // API Domain Route Handlers
