@@ -91,8 +91,10 @@ async function main() {
     { walletId: user2.wallet!.id, userName: user2.name },
   ];
 
-  // 2. Bulk Seed 500 Dummy Users & Funded Wallets
-  const TOTAL_USERS = 500;
+  // 2. Bulk Seed Dummy Users & Funded Wallets
+  // const TOTAL_USERS = 500; // Original count for local testing
+  const TOTAL_USERS = 25; // Reduced for Supabase Free Tier
+
   console.log(`👥 Bulk generating ${TOTAL_USERS} dummy users with funded wallets ($50k - $100k capital)...`);
 
   const usersData = [];
@@ -141,9 +143,11 @@ async function main() {
   await prisma.walletTransaction.createMany({ data: initialTxBatch });
   console.log(`✅ ${TOTAL_USERS} Users, Wallets, and Initial Credit Transactions created successfully!`);
 
-  // 3. Bulk Seed 100,000 Historical Wallet Transactions for B-Tree Index Benchmarking
-  const TOTAL_TRANSACTIONS = 100000;
-  const TX_BATCH_SIZE = 10000;
+  // 3. Bulk Seed Historical Wallet Transactions for B-Tree Index Benchmarking
+  // const TOTAL_TRANSACTIONS = 100000; // Original count for local testing
+  // const TX_BATCH_SIZE = 10000; // Original batch size for local testing
+  const TOTAL_TRANSACTIONS = 200; // Reduced for Supabase Free Tier
+  const TX_BATCH_SIZE = 50; // Reduced batch size for Supabase Free Tier
 
   console.log(`💳 Seeding ${TOTAL_TRANSACTIONS} historical transactions in batches of ${TX_BATCH_SIZE}...`);
 
@@ -199,7 +203,7 @@ async function main() {
   await Promise.all(updatePromises);
   console.log("✅ All wallet balances synchronized with transaction ledger history!");
 
-  // 4. Bulk Seed 100,000 JSONB Products
+  // 4. Bulk Seed JSONB Products
   const categories = ["electronics", "apparel", "footwear", "accessories"];
   const electronicsBrands = ["Apple", "Dell", "Asus", "Lenovo", "Sony", "HP", "Acer"];
   const apparelBrands = ["Nike", "Adidas", "Zara", "UrbanWear", "Levi's", "H&M"];
@@ -212,8 +216,10 @@ async function main() {
   const sizes = ["S", "M", "L", "XL", "XXL"];
   const colors = ["Black", "White", "Blue", "Red", "Grey", "Silver"];
 
-  const TOTAL_PRODUCTS = 100000;
-  const PRODUCT_BATCH_SIZE = 5000;
+  // const TOTAL_PRODUCTS = 100000; // Original count for local testing
+  // const PRODUCT_BATCH_SIZE = 5000; // Original batch size for local testing
+  const TOTAL_PRODUCTS = 100; // Reduced for Supabase Free Tier
+  const PRODUCT_BATCH_SIZE = 50; // Reduced batch size for Supabase Free Tier
 
   console.log(`📦 Seeding ${TOTAL_PRODUCTS} JSONB products in batches of ${PRODUCT_BATCH_SIZE}...`);
 
@@ -285,7 +291,7 @@ async function main() {
     console.log(`✅ Products Progress: ${i + PRODUCT_BATCH_SIZE} / ${TOTAL_PRODUCTS} inserted`);
   }
 
-  console.log("🎉 MASSIVE DATABASE SEEDING COMPLETED SUCCESSFULLY!");
+  console.log("🎉 DATABASE SEEDING COMPLETED SUCCESSFULLY!");
 }
 
 main()
