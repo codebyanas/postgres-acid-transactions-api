@@ -1,6 +1,6 @@
 # PostgreSQL ACID Transactions API
 
-A high-concurrency Node.js, Express & TypeScript financial backend engine powered by PostgreSQL and Prisma ORM. Engineered for zero-data-loss P2P atomic digital wallet transfers, user provisioning pipelines, pessimistic row-locking race-condition prevention, automated debt recovery, double-entry reversal mechanics, strict input sanitization, dynamic JSONB search engines at 100k scale, GIN index query optimization, multi-column B-Tree performance benchmarking, cursor-based $O(1)$ seek pagination, and multi-layered audit logging.
+A high-concurrency Node.js, Express & TypeScript financial backend engine powered by PostgreSQL and Prisma ORM. Engineered for zero-data-loss P2P atomic digital wallet transfers, user provisioning pipelines, pessimistic row-locking race-condition prevention, automated debt recovery, double-entry reversal mechanics, strict input sanitization, dynamic JSONB search engines at 100k scale, GIN index query optimization, multi-column B-Tree performance benchmarking, cursor-based $O(1)$ seek pagination, automated reconciliation background workers, and multi-layered OWASP security hardening.
 
 ---
 
@@ -10,7 +10,8 @@ A high-concurrency Node.js, Express & TypeScript financial backend engine powere
 * **Language:** TypeScript (Strict typing & ESNext compilation target)
 * **Database:** PostgreSQL (Relational integrity, JSONB metadata, Decimal precision, GIN Indexing, B-Tree Composite Indexing)
 * **ORM:** Prisma ORM v7 with `@prisma/adapter-pg`
-* **Utilities:** Base64 Cursor Encoders/Decoders for $O(1)$ Seek Pagination
+* **Security & Validation:** Zod Environment Guard, Helmet Security Headers, Express Rate Limit (DDoS/Bot Mitigation)
+* **Utilities:** Base64 Cursor Encoders/Decoders for $O(1)$ Seek Pagination, Periodic Background Cron Workers
 * **Execution Environment:** `tsx`, Node `pg` connection pool, `dotenv`
 
 ---
@@ -67,6 +68,14 @@ The system implements a security and consistency architecture for high-concurren
    * **Wallet Transactions Endpoint:** Accelerated deep-page transaction lookups from **71.99ms (Offset)** → **5.30ms (Cursor)** (**~13.5x Speedup**).
    * **Products Engine (80,000 Record Deep Jump):** Reduced query execution time from **142.75ms (Offset `skip=80000`)** → **< 5ms (Cursor)**, proving constant $O(1)$ sub-millisecond latency regardless of dataset depth.
 
+### 🛡️ Phase 8: Automated Background Worker, Security Hardening & System Resilience
+1. **Zod Boot-Time Environment Guard (`env.config.ts`):** Enforces strict Zod validation on `.env` variables (`DATABASE_URL`, `JWT_SECRET` min 16 chars, `PORT`) prior to application initialization. Implements a fail-fast boot pattern (`process.exit(1)`) preventing runtime database connection drops or weak encryption keys.
+2. **Automated Reconciliation Background Worker (`reconciliation.cron.ts`):** Operates a background cron worker running every 15 minutes (and immediately on server boot) to recalculate user balances against immutable transaction histories, identifying ledger anomalies without manual intervention.
+3. **Express Rate Limiting (DDoS & Bot Spam Protection):** Integrates `express-rate-limit` middleware enforcing strict rate caps: 10 requests / 1 minute on sensitive financial endpoints (`/api/wallets/transfer`), and 100 requests / 15 minutes application-wide to block brute-force scripts and DDoS attacks.
+4. **Helmet Security Header Injection (`helmet()`):** Injects production-grade HTTP response headers (`X-Frame-Options: SAMEORIGIN`, `X-Content-Type-Options: nosniff`, `X-DNS-Prefetch-Control: off`) to automatically defend against Cross-Site Scripting (XSS), Clickjacking, and MIME-sniffing vulnerabilities.
+5. **Global Centralized Error Interceptor (`errorHandler.middleware.ts`):** Implements Express error handling middleware protecting against internal system information leakage. In production mode (`NODE_ENV=production`), hides database stack traces and returns clean, standardized JSON errors (`500 Internal Server Error`).
+6. **OS Signal Lifecycle & Process Exception Guards (`server.ts`):** Intercepts OS signals (`SIGINT`, `SIGTERM`) to gracefully shut down HTTP connections, clear active interval timers, and disconnect the Prisma database pool. Registers system-wide listeners for `unhandledRejection` and `uncaughtException` events to maintain process stability.
+
 ---
 
 ## 🗄️ Database Schema Design
@@ -82,11 +91,13 @@ The system implements a security and consistency architecture for high-concurren
 ## 🚀 Local Development Setup
 
 ### 1. Prerequisites
-Define your connection string and application port in a `.env` file at the project root:
+Define your connection string, application port, environment state, and secret key in a `.env` file at the project root:
 
 ```env
 DATABASE_URL="postgresql://username:password@localhost:5432/postgres_acid_db"
 PORT=5000
+NODE_ENV=development
+JWT_SECRET=super_secret_key_at_least_16_chars_long
 ```
 
 ### 2. Initialization Workflow
@@ -103,6 +114,9 @@ npx prisma generate
 
 # 4. Seed high-volume test state (500 Users, 100k Transactions, 100k JSONB Products, Reserve Float)
 npx prisma db seed
+
+# 5. Start development server with Zod guard and background audit worker
+npm run dev
 ```
 
 ### 3. Automated CLI Test Suite
@@ -130,6 +144,12 @@ npx tsx scripts/verify-btree-deep.ts
 
 ## 📡 API Reference
 
+### 🏥 System Module (`/health`)
+
+| Method | Endpoint | Description | Response Example |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/health` | Server health check verifying HTTP server uptime and Helmet security header injection. | `{"status": "OK", "message": "Server is running smoothly!"}` |
+
 ### 👤 User Module (`/api/users`)
 
 | Method | Endpoint | Description | Payload Example |
@@ -142,7 +162,7 @@ npx tsx scripts/verify-btree-deep.ts
 | Method | Endpoint | Description | Payload / Query / Headers |
 | :--- | :--- | :--- | :--- |
 | `GET` | `/api/wallets` | Retrieves all active and restricted wallets. | *None* |
-| `POST` | `/api/wallets/transfer` | High-concurrency P2P atomic transfer with status checks & row-locking. | **Headers:** `x-idempotency-key: <UUID>`<br>**Body:** `{"senderUserId": "...", "receiverUserId": "...", "amount": 60.00}` |
+| `POST` | `/api/wallets/transfer` | High-concurrency P2P atomic transfer with status checks, row-locking & rate limiting (10 req/min). | **Headers:** `x-idempotency-key: <UUID>`<br>**Body:** `{"senderUserId": "...", "receiverUserId": "...", "amount": 60.00}` |
 | `POST` | `/api/wallets/reverse` | Executes double-entry reversal with negative balance overdraft handling. | **Headers:** `x-idempotency-key: <UUID>`<br>**Body:** `{"transactionId": "..."}` |
 | `POST` | `/api/wallets/deposit` | Deposits funds into wallet, automatically clearing active system debt if restricted. | **Headers:** `x-idempotency-key: <UUID>`<br>**Body:** `{"userId": "...", "amount": 100.00}` |
 | `GET` | `/api/wallets/:walletId/transactions` | Fetches wallet transaction ledger using $O(1)$ Cursor (Seek) or Offset (Skip) benchmarking. | **Query Params:**<br>`?limit=20&cursor=eyJpZCI6...`<br>or `?limit=20&skip=5000` |
@@ -171,4 +191,4 @@ npx tsx scripts/verify-btree-deep.ts
 - [x] **Phase 5:** PostgreSQL JSONB Filtering Engine & GIN Index Benchmarking (Dynamic parameter searching via `@>` containment, GIN Indexing with `JsonbPathOps`, 100k scale batch seeding, `DISCARD ALL` Cold Scan CLI benchmarks, 57.4% Query Cost reduction).
 - [x] **Phase 6:** Database Indexing & B-Tree / Multi-Column Query Performance Benchmarking (Composite `[walletId, createdAt]` B-Tree indexing, 500 multi-user high-cardinality 100k seed pipeline, `verify-btree-deep.ts` side-by-side verification, 95x DB execution speedup on ledger sorts, Postman benchmark endpoint).
 - [x] **Phase 7:** Cursor-Based (Seek) Pagination Engine & $O(1)$ Benchmarking (Base64 cursor encoding, dual Offset vs Cursor controllers, B-Tree leaf node seek jumps, 80k deep-skip benchmarking reducing DB execution latency from 142.7ms to <5ms).
-- [ ] **Phase 8:** Background Audit Worker, Soft Deletes & System Hardening.
+- [x] **Phase 8:** Automated Background Reconciliation Worker, Security Hardening & System Resilience (Zod Boot Guard, Rate Limiting, Helmet Headers, Global Error Handler, Graceful Shutdown & Exception Guards).
