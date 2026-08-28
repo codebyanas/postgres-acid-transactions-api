@@ -1,6 +1,6 @@
 # PostgreSQL ACID Transactions API
 
-A high-concurrency Node.js, Express & TypeScript financial backend engine powered by PostgreSQL and Prisma ORM. Engineered for zero-data-loss P2P atomic digital wallet transfers, user provisioning pipelines, pessimistic row-locking race-condition prevention, automated debt recovery, double-entry reversal mechanics, strict input sanitization, dynamic JSONB search engines at 100k scale, GIN index query optimization, multi-column B-Tree performance benchmarking, cursor-based $O(1)$ seek pagination, automated reconciliation background workers, and multi-layered OWASP security hardening.
+A high-concurrency Node.js, Express & TypeScript financial backend engine powered by PostgreSQL and Prisma ORM. Engineered for zero-data-loss P2P atomic digital wallet transfers, user provisioning pipelines, pessimistic row-locking race-condition prevention, automated debt recovery, double-entry reversal mechanics, strict input sanitization, dynamic JSONB search engines at 100k scale, GIN index query optimization, multi-column B-Tree performance benchmarking, cursor-based $O(1)$ seek pagination, automated reconciliation background workers, multi-layered OWASP security hardening, and an automated multi-tier Jest testing pipeline (Unit, Integration, E2E).
 
 ---
 
@@ -11,6 +11,7 @@ A high-concurrency Node.js, Express & TypeScript financial backend engine powere
 * **Database:** PostgreSQL (Relational integrity, JSONB metadata, Decimal precision, GIN Indexing, B-Tree Composite Indexing)
 * **ORM:** Prisma ORM v7 with `@prisma/adapter-pg`
 * **Security & Validation:** Zod Environment Guard, Helmet Security Headers, Express Rate Limit (DDoS/Bot Mitigation)
+* **Testing Suite:** Jest, Supertest, `pg` mock spies, and custom database isolation helpers (`testDb.ts`)
 * **Utilities:** Base64 Cursor Encoders/Decoders for $O(1)$ Seek Pagination, Periodic Background Cron Workers
 * **Execution Environment:** `tsx`, Node `pg` connection pool, `dotenv`
 
@@ -76,6 +77,17 @@ The system implements a security and consistency architecture for high-concurren
 5. **Global Centralized Error Interceptor (`errorHandler.middleware.ts`):** Implements Express error handling middleware protecting against internal system information leakage. In production mode (`NODE_ENV=production`), hides database stack traces and returns clean, standardized JSON errors (`500 Internal Server Error`).
 6. **OS Signal Lifecycle & Process Exception Guards (`server.ts`):** Intercepts OS signals (`SIGINT`, `SIGTERM`) to gracefully shut down HTTP connections, clear active interval timers, and disconnect the Prisma database pool. Registers system-wide listeners for `unhandledRejection` and `uncaughtException` events to maintain process stability.
 
+### 🧪 Phase 9: Multi-Tiered Automated Testing, Integration Hardening & Verification
+1. **Testing Architecture & Separation of Concerns:** Structured the test environment into dedicated, isolated directories under `tests/` following standard testing pyramid principles:
+   * **`tests/unit/` (Fast Isolated Logic):** Tests Zod transfer payload validation (`payload.test.ts`) and boot-time environment schema rules (`env.test.ts`) using isolated Jest mocks without hitting external infrastructure.
+   * **`tests/integration/` (Database & ACID Enforcement):** Validates atomic database transfers, row locks, idempotency duplicate key prevention (`walletTransfer.test.ts`), and negative balance overdraft restrictions (`financialRecovery.test.ts`) against a live PostgreSQL test database instance.
+   * **`tests/e2e/` (Full Lifecycle Flow):** Simulates end-to-end multi-step application scenarios (`financialFlow.test.ts`), covering **User Signup $\rightarrow$ Deposit $\rightarrow$ P2P Transfer $\rightarrow$ Background Reconciliation Audit Execution**.
+2. **Database Test Seeding & Parity Synchronization (`testDb.ts`):** Engineered custom DB cleanup (`cleanDatabase()`) and seed helpers that initialize a `System Reserve Float` account alongside explicit `CREDIT` ledger transactions to maintain 100% ledger-to-wallet mathematical parity during test runs.
+3. **Environment Log & Noise Optimization:** 
+   * Configured `src/app.ts` to conditionally suppress HTTP request logging (`morgan`) during test executions (`process.env.NODE_ENV !== "test"`).
+   * Integrated console spy handlers (`jest.spyOn(console, "error")`) in deliberate failure unit tests (e.g., short `JWT_SECRET` checks) to maintain clean, clutter-free terminal outputs.
+4. **Verification & Test Suite Results:** Achieved 100% passing status across all **5 test suites (9 individual tests)** executed via Jest with `--runInBand` and open handle detection flags.
+
 ---
 
 ## 🗄️ Database Schema Design
@@ -85,6 +97,7 @@ The system implements a security and consistency architecture for high-concurren
 * **`WalletTransaction`**: Immutable ledger recording `CREDIT`, `DEBIT`, `REVERSAL_CREDIT`, and `REVERSAL_DEBIT` events. Contains `idempotencyKey`, `senderName`, `receiverName`, and composite B-Tree indexing on `[walletId, createdAt]`.
 * **`Product`**: Inventory table incorporating `JSONB` for `metadata`, configured with a PostgreSQL `GIN` index (`JsonbPathOps`) on `metadata` for ultrafast schema-less search and a B-Tree index on `price` for numerical range filtering.
 * **`Order` & `OrderItem`**: Normalized checkout records representing snapshot pricing and purchasing relational integrity.
+* **`AuditLog`**: Stores discrepancy logs flagged by the background financial reconciliation engine.
 
 ---
 
@@ -119,11 +132,14 @@ npx prisma db seed
 npm run dev
 ```
 
-### 3. Automated CLI Test Suite
+### 3. Automated CLI & Automated Jest Test Suite Execution
 
-Execute CLI test suites to verify atomic transfers, financial reversals, debt recovery, payload validation, status guards, GIN JSONB performance, and B-Tree index optimization:
+Execute Jest or CLI test suites to verify atomic transfers, financial reversals, debt recovery, payload validation, status guards, GIN JSONB performance, and B-Tree index optimization:
 
 ```bash
+# Execute Complete Automated Jest Test Suite (Unit, Integration, E2E)
+npm test
+
 # Atomic Wallet Transfer & Guard Test Suite
 npx tsx scripts/run-atomic-wallet-transfer-test.ts
 
@@ -192,3 +208,4 @@ npx tsx scripts/verify-btree-deep.ts
 - [x] **Phase 6:** Database Indexing & B-Tree / Multi-Column Query Performance Benchmarking (Composite `[walletId, createdAt]` B-Tree indexing, 500 multi-user high-cardinality 100k seed pipeline, `verify-btree-deep.ts` side-by-side verification, 95x DB execution speedup on ledger sorts, Postman benchmark endpoint).
 - [x] **Phase 7:** Cursor-Based (Seek) Pagination Engine & $O(1)$ Benchmarking (Base64 cursor encoding, dual Offset vs Cursor controllers, B-Tree leaf node seek jumps, 80k deep-skip benchmarking reducing DB execution latency from 142.7ms to <5ms).
 - [x] **Phase 8:** Automated Background Reconciliation Worker, Security Hardening & System Resilience (Zod Boot Guard, Rate Limiting, Helmet Headers, Global Error Handler, Graceful Shutdown & Exception Guards).
+- [x] **Phase 9:** Multi-Tiered Automated Testing, Integration Hardening & Verification (Unit, Integration, E2E Test Suite setup with Jest/Supertest, zero-disparity ledger parity helpers, `morgan` test noise suppression, 100% test pass verification).
