@@ -19,6 +19,15 @@ app.use(globalRateLimiter);
 
 app.use(cors());
 
+// Health Check Route
+app.get("/", (req: Request, res: Response) => {
+  res.json({
+    success: true,
+    message: "Welcome!",
+    status: "Server is healthy and running",
+  });
+});
+
 // Test environment me HTTP morgan logs ko silence karne ke liye check
 if (process.env.NODE_ENV !== "test") {
   app.use(morgan("dev"));
