@@ -13,21 +13,58 @@ if (!connectionString) {
   process.exit(1);
 }
 
-// Configure PostgreSQL connection pool settings
+/* ====================================================================
+   OLD LOCAL CONNECTION SETUP (Commented out for future local testing)
+   ====================================================================
 const pool = new Pool({
   connectionString,
-  max: 10,                      // Maximum number of active connections in pool
-  idleTimeoutMillis: 30000,     // Close idle clients after 30 seconds
-  connectionTimeoutMillis: 5000, // Timeout connection attempt after 5 seconds
+  max: 10,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 5000,
 });
 
-// Listener for unexpected errors on idle pool connections
 pool.on("error", (err) => {
   console.error("Unexpected error on idle PostgreSQL client:", err.message);
 });
 
 const adapter = new PrismaPg(pool);
 const basePrisma = new PrismaClient({ adapter });
+
+export const prisma = basePrisma.$extends(softDeleteExtension);
+==================================================================== */
+
+// ====================================================================
+// NEW VERCEL SERVERLESS SINGLETON PATTERN (Prevents Connection Leaks)
+// ====================================================================
+
+const globalForPrisma = globalThis as unknown as {
+  prismaPool?: Pool;
+  prismaAdapter?: PrismaPg;
+  prismaClient?: any;
+};
+
+// Reuse existing pool or create a new one for serverless functions
+const pool =
+  globalForPrisma.prismaPool ??
+  new Pool({
+    connectionString,
+    max: process.env.NODE_ENV === "production" ? 3 : 10, // Serverless lambdas call ke liye light max pool
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 5000,
+  });
+
+pool.on("error", (err) => {
+  console.error("Unexpected error on idle PostgreSQL client:", err.message);
+});
+
+const adapter = globalForPrisma.prismaAdapter ?? new PrismaPg(pool);
+const basePrisma = globalForPrisma.prismaClient ?? new PrismaClient({ adapter });
+
+if (process.env.NODE_ENV !== "production") {
+  globalForPrisma.prismaPool = pool;
+  globalForPrisma.prismaAdapter = adapter;
+  globalForPrisma.prismaClient = basePrisma;
+}
 
 // Apply Soft Delete extension to Prisma client instance
 export const prisma = basePrisma.$extends(softDeleteExtension);

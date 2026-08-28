@@ -1,6 +1,7 @@
 import { prisma } from "../config/db";
 import { TransactionType, WalletStatus } from "@prisma/client";
 import { parseAndValidateAmount } from "./atomic-wallet-transaction";
+import { Prisma } from "@prisma/client";
 
 /**
  * SYSTEM RESERVE CONSTANTS
@@ -15,13 +16,18 @@ const SYSTEM_RESERVE_EMAIL = "system.reserve@bank.internal";
  */
 export const executeTransactionReversal = async (
   originalTransactionId: string,
-  idempotencyKey?: string
+  idempotencyKey?: string,
 ) => {
-  if (!originalTransactionId || typeof originalTransactionId !== "string" || originalTransactionId.trim() === "") {
+  if (
+    !originalTransactionId ||
+    typeof originalTransactionId !== "string" ||
+    originalTransactionId.trim() === ""
+  ) {
     throw new Error("Invalid original transaction ID provided for reversal.");
   }
 
-  return await prisma.$transaction(async (tx) => {
+  // return await prisma.$transaction(async (tx) => {
+  return await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     // 1. Fetch Original Transaction with Sender User Details
     const originalTx = await tx.walletTransaction.findUnique({
       where: { id: originalTransactionId },
@@ -33,23 +39,31 @@ export const executeTransactionReversal = async (
     });
 
     if (!originalTx) {
-      throw new Error(`Original transaction '${originalTransactionId}' not found.`);
+      throw new Error(
+        `Original transaction '${originalTransactionId}' not found.`,
+      );
     }
 
     if (originalTx.type !== TransactionType.DEBIT) {
-      throw new Error("Reversal can only be initiated from the primary DEBIT transaction entry.");
+      throw new Error(
+        "Reversal can only be initiated from the primary DEBIT transaction entry.",
+      );
     }
 
     // GUARD: Prevent Double Reversal
     const existingReversal = await tx.walletTransaction.findFirst({
       where: {
         description: { contains: originalTransactionId },
-        type: { in: [TransactionType.REVERSAL_CREDIT, TransactionType.REVERSAL_DEBIT] },
+        type: {
+          in: [TransactionType.REVERSAL_CREDIT, TransactionType.REVERSAL_DEBIT],
+        },
       },
     });
 
     if (existingReversal) {
-      throw new Error(`Transaction '${originalTransactionId}' has already been reversed. Double-reversal strictly prohibited.`);
+      throw new Error(
+        `Transaction '${originalTransactionId}' has already been reversed. Double-reversal strictly prohibited.`,
+      );
     }
 
     const reversalAmount = Number(originalTx.amount);
@@ -61,19 +75,27 @@ export const executeTransactionReversal = async (
     });
 
     if (!systemUser || !systemUser.wallet) {
-      throw new Error("System Reserve Float Wallet not initialized. Run seed script first.");
+      throw new Error(
+        "System Reserve Float Wallet not initialized. Run seed script first.",
+      );
     }
 
     // 3. Extract Receiver User ID from Original Description
     const descriptionParts = originalTx.description.split("User ID: ");
     if (descriptionParts.length < 2) {
-      throw new Error("Failed to parse receiver user ID from original transaction record.");
+      throw new Error(
+        "Failed to parse receiver user ID from original transaction record.",
+      );
     }
     const receiverUserId = descriptionParts[1].replace(")", "").trim();
 
     // 4. Lock All Affected Wallets
     const senderWallet = originalTx.wallet;
-    const lockOrder = [senderWallet.userId, receiverUserId, systemUser.id].sort();
+    const lockOrder = [
+      senderWallet.userId,
+      receiverUserId,
+      systemUser.id,
+    ].sort();
 
     for (const uId of lockOrder) {
       await tx.$queryRaw`
@@ -119,7 +141,10 @@ export const executeTransactionReversal = async (
       where: { id: receiverWallet.id },
       data: {
         balance: newReceiverBalance,
-        status: newReceiverBalance < 0 ? WalletStatus.RESTRICTED : receiverWallet.status,
+        status:
+          newReceiverBalance < 0
+            ? WalletStatus.RESTRICTED
+            : receiverWallet.status,
       },
     });
 
@@ -174,11 +199,12 @@ export const executeTransactionReversal = async (
 export const depositAndClearDebt = async (
   userId: string,
   rawAmount: any,
-  idempotencyKey?: string
+  idempotencyKey?: string,
 ) => {
   const depositAmount = parseAndValidateAmount(rawAmount);
 
-  return await prisma.$transaction(async (tx) => {
+  // return await prisma.$transaction(async (tx) => {
+  return await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
     const systemUser = await tx.user.findUnique({
       where: { email: SYSTEM_RESERVE_EMAIL },
       include: { wallet: true },
@@ -242,9 +268,10 @@ export const depositAndClearDebt = async (
         walletId: userWallet.id,
         amount: depositAmount,
         type: TransactionType.CREDIT,
-        description: debtRepaidToSystem > 0
-          ? `DEPOSIT & DEBT CLEARANCE: $${debtRepaidToSystem.toFixed(2)} auto-diverted to clear system debt.`
-          : `STANDARD DEPOSIT: Added $${depositAmount.toFixed(2)} to wallet balance.`,
+        description:
+          debtRepaidToSystem > 0
+            ? `DEPOSIT & DEBT CLEARANCE: $${debtRepaidToSystem.toFixed(2)} auto-diverted to clear system debt.`
+            : `STANDARD DEPOSIT: Added $${depositAmount.toFixed(2)} to wallet balance.`,
         senderName: userWallet.user.name,
         receiverName: userWallet.user.name,
         idempotencyKey: idempotencyKey || null,

@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { Request, Response } from "express";
 import { prisma } from "../config/db";
 
@@ -6,7 +7,8 @@ export const signupUser = async (req: Request, res: Response): Promise<void> => 
   const { name, email } = req.body;
 
   try {
-    const result = await prisma.$transaction(async (tx) => {
+    // const result = await prisma.$transaction(async (tx) => {
+   const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const newUser = await tx.user.create({
         data: {
           name,

@@ -6,6 +6,7 @@ import userRoutes from "./routes/user.routes";
 import productRoutes from "./routes/product.routes";
 import walletRoutes from "./routes/wallet.routes";
 import benchmarkRoutes from "./routes/benchmark.routes";
+import cronRoutes from "./routes/cron.routes";
 import { globalRateLimiter } from "./middlewares/rateLimiter.middleware";
 import { globalErrorHandler } from "./middlewares/errorHandler.middleware";
 
@@ -28,7 +29,7 @@ app.get("/", (req: Request, res: Response) => {
   });
 });
 
-// Test environment me HTTP morgan logs ko silence karne ke liye check
+// Silence HTTP morgan logs during unit/integration test runs
 if (process.env.NODE_ENV !== "test") {
   app.use(morgan("dev"));
 }
@@ -40,6 +41,9 @@ app.use("/api/users", userRoutes);
 app.use("/api/products", productRoutes);
 app.use("/api/wallet", walletRoutes);
 app.use("/api/benchmark", benchmarkRoutes);
+
+// Register Cron endpoint for Vercel scheduled execution
+app.use("/api/cron", cronRoutes);
 
 app.get("/health", (req: Request, res: Response) => {
   res.json({ status: "OK", message: "Server is running smoothly!" });

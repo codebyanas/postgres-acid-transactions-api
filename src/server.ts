@@ -6,29 +6,30 @@ import { validateEnv } from "./config/env.config";
 const PORT = process.env.PORT || 5000;
 
 const startServer = async () => {
-  // Security Hardening: Validate environment configuration prior to database connection
+  // Security Hardening: Validate environment configuration prior to database initialization
   validateEnv();
 
-  // Connect Database
+  // Initialize active database connection
   await connectDB();
 
-  // Run initial background audit check on server boot
+  // Execute initial background audit check on local server startup
   runReconciliationAudit();
 
-  // Set periodic background worker run (Executes automatically every 15 minutes)
+  // Schedule background worker for local development environment (Runs every 15 minutes)
   const FIFTEEN_MINUTES = 15 * 60 * 1000;
   const cronInterval = setInterval(() => {
+    console.log("⏰ [LOCAL WORKER] Running scheduled financial audit...");
     runReconciliationAudit();
   }, FIFTEEN_MINUTES);
 
   const server = app.listen(PORT, () => {
-    console.log(`🚀 Server running on http://localhost:${PORT}`);
+    console.log(`🚀 Local Server running on http://localhost:${PORT}`);
   });
 
   // Graceful Shutdown Handler
   const handleShutdown = async (signal: string) => {
     console.log(`\n ⚠️ ${signal} received. Closing HTTP server & Database connections...`);
-    clearInterval(cronInterval); // Clear periodic background worker timer
+    clearInterval(cronInterval);
     server.close(async () => {
       await disconnectDB();
       console.log("✅ Cleanup complete. Process exiting gracefully.");
@@ -41,7 +42,7 @@ const startServer = async () => {
   process.on("SIGTERM", () => handleShutdown("SIGTERM"));
 
   // Global Unhandled Promise Rejection Handler
-  process.on("unhandledRejection", (reason: any, promise: Promise<any>) => {
+  process.on("unhandledRejection", (reason: any) => {
     console.error("🚨 [UNHANDLED REJECTION] Asynchronous exception caught outside Express scope:", reason);
   });
 

@@ -5,5 +5,11 @@
       "source": "/(.*)",
       "destination": "/api"
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/reconciliation",
+      "schedule": "0 0 1 * *"
+    }
   ]
 }
