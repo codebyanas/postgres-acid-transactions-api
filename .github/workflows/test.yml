@@ -38,6 +38,10 @@ jobs:
       - name: Install Dependencies
         run: npm ci
 
+      # Added Prisma Client Generation step prior to database push & tests
+      - name: Generate Prisma Client
+        run: npx prisma generate
+
       - name: Sync Database Schema
         run: npx prisma db push
         env:

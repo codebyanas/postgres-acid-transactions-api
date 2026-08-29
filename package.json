@@ -7,7 +7,7 @@
     "build": "prisma generate && tsc",
     "vercel-build": "prisma generate && tsc",
     "start": "node dist/server.js",
-    "test": "jest --runInBand --detectOpenHandles --forceExit",
+    "test": "prisma generate && jest --runInBand --detectOpenHandles --forceExit",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "studio": "prisma studio"
