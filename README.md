@@ -1,6 +1,7 @@
 # PostgreSQL ACID Transactions API
 
 A high-concurrency Node.js, Express & TypeScript financial backend engine powered by PostgreSQL and Prisma ORM. Engineered for zero-data-loss P2P atomic digital wallet transfers, user provisioning pipelines, pessimistic row-locking race-condition prevention, automated debt recovery, double-entry reversal mechanics, strict input sanitization, dynamic JSONB search engines at 100k scale, GIN index query optimization, multi-column B-Tree performance benchmarking, cursor-based $O(1)$ seek pagination, automated reconciliation background workers, multi-layered OWASP security hardening, and an automated multi-tier Jest testing pipeline (Unit, Integration, E2E).
+
 ---
 
 ## 🏗️ Architecture & Tech Stack
